@@ -763,7 +763,7 @@ cat(sprintf(paste0("A série tem **%d trimestres**, do %dT%s ao %dT%s. ",
 
 #### Figura 2.1. IDH-T
 
-```{r itd-resultado-grafico, echo=FALSE, eval=tem_idht, fig.width=8, fig.height=4.5}
+```{r itd-resultado-grafico, echo=FALSE, eval=tem_idht, fig.width=7, fig.height=3.8, out.width=img_out_width}
 ggplot2::ggplot(idht, ggplot2::aes(as.Date(data), idht)) +
   ggplot2::geom_line(linewidth = 1.1) +
   ggplot2::scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
