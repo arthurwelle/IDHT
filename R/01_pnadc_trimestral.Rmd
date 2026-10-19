@@ -1,0 +1,353 @@
+---
+title: "PNAD Contínua Trimestral"
+subtitle: "Projeto Índice do Trabalho Decente, relatório de execução"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r pnadct-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
+                      fig.width = 8, fig.height = 4.5)
+if (!exists("DIR_RAIZ")) source("R/00_config.R")
+suppressPackageStartupMessages({
+  library(future.apply)
+  library(Hmisc)
+  library(reldist)
+})
+```
+
+## Fonte
+
+PNAD Contínua Trimestral, microdados do IBGE. Produz 14 séries, entre elas 7 das
+9 que compõem o IDH-T, mais a população segurada usada pelo indicador de
+acidentes de trabalho.
+
+Peso amostral: `V1028`. Para erro padrão, usar os pesos replicados `V1028001` a
+`V1028200` com `survey::svrepdesign(type = "bootstrap")`; as séries publicadas
+trazem o ponto estimado, sem intervalo.
+
+## Obtenção
+
+Dois caminhos, nesta ordem:
+
+1. **Trimestres já processados.** Arquivos `PNADCT_<TTAAAA>.gz` na pasta
+   `DIR_PNADCT`, definida em `R/00_config.R`. São microdados já lidos com o
+   dicionário SAS e gravados em formato compacto. Ficam fora do pacote por causa
+   do tamanho, cerca de 200 MB por trimestre.
+2. **Trimestres novos.** Baixados na hora pelo pacote `PNADcIBGE`, que lê do FTP
+   do IBGE e devolve o microdado em memória. O download não é gravado.
+
+O procedimento para recriar a pasta de microdados do zero está em
+`dados/pnadc_trimestral/LEIAME.md`.
+
+Deflatores: `dados/pnadc_trimestral/deflator_PNADC.xls`, do `Deflatores.zip` do
+FTP do IBGE. Trimestres fora da cobertura do arquivo são ignorados, com aviso.
+
+```{r pnadct-manifesto}
+# Garante o deflator mais recente. O download tambem acontece em R/03_pof.Rmd,
+# que define a linha de renda na mesma base de precos; aqui a chamada serve para
+# o caso de este script rodar sozinho.
+ARQ_DEFLATOR_USO <- f_baixa_deflator()
+f_registra_manifesto("pnadc_trimestral", ARQ_DEFLATOR_USO, "bruto", URL_DEFLATOR)
+
+DEFLATOR <- f_le_deflator()
+message("deflator: ", basename(ARQ_DEFLATOR_USO),
+        " | base de precos: ", format(f_base_precos_deflator(ARQ_DEFLATOR_USO), "%m/%Y"),
+        " | linha da POF: R$ ", round(V_LINHA_POF_MENSAL, 2))
+
+# O cache guarda a base com que foi gerado. Se o deflator ou a linha da POF
+# mudarem, todos os rendimentos mudam, e o cache e descartado.
+ARQ_MARCA   <- file.path(DIR_CACHE, "_base.txt")
+marca_atual <- paste(basename(ARQ_DEFLATOR_USO), round(V_LINHA_POF_HORA, 6))
+marca_cache <- if (file.exists(ARQ_MARCA)) readLines(ARQ_MARCA, warn = FALSE)[1] else NA
+
+if (!is.na(marca_cache) && marca_cache != marca_atual) {
+  message("base de precos mudou desde a ultima rodada.")
+  message("  antes: ", marca_cache)
+  message("  agora: ", marca_atual)
+  message("cache descartado: toda a serie sera recalculada.")
+  unlink(list.files(DIR_CACHE, pattern = "[.]rds$", full.names = TRUE))
+}
+writeLines(marca_atual, ARQ_MARCA)
+
+DEFLATOR[, .(trimestres = uniqueN(paste(Ano, Trimestre)),
+             primeiro = min(Ano), ultimo = max(Ano))]
+```
+
+## Variáveis usadas
+
+| Código | Conteúdo |
+|---|---|
+| `V1028` | peso amostral |
+| `V2007`, `V2010` | sexo, cor ou raça |
+| `V4006`, `V4006A` | motivo do afastamento (muda no 4T2015) |
+| `V4010`, `V4019` | código da ocupação, CNPJ do negócio |
+| `V40401`, `V40402`, `V40403` | tempo no trabalho atual |
+| `VD4001` a `VD4005` | força de trabalho, ocupação, FT potencial, subocupação |
+| `VD4009`, `VD4011` | posição na ocupação, grupamento ocupacional |
+| `VD4012` | contribuição à previdência |
+| `VD4019`, `VD4031` | rendimento habitual e horas habituais, todos os trabalhos |
+
+```{r pnadct-colunas}
+COLS_PNADCT <- c("Ano", "Trimestre", "UF", "V1028", "V2007", "V2010",
+                 "V4006", "V4006A", "V4010", "V4019",
+                 "V40401", "V40402", "V40403",
+                 "VD4001", "VD4002", "VD4003", "VD4004", "VD4004A", "VD4005",
+                 "VD4009", "VD4011", "VD4012", "VD4019", "VD4031")
+```
+
+## Limpeza e harmonização
+
+Três mudanças de questionário exigem tratamento por período:
+
+- **Subocupação por insuficiência de horas**: `VD4004` (horas efetivas) até
+  3T2015, `VD4004A` (horas habituais) a partir do 4T2015.
+- **Motivo do afastamento**: `V4006` até 3T2015, `V4006A` depois. A categoria 3
+  é licença remunerada por doença ou acidente da própria pessoa nas duas.
+- **Formalidade do empregador**: contribuição à previdência até 3T2015, CNPJ
+  (`V4019`) a partir do 4T2015, quando a variável passa a existir.
+
+```{r pnadct-funcoes-leitura}
+#' Le um trimestre, aplica o deflator e cria as variaveis derivadas.
+#' @param v_tri string TTAAAA, por exemplo "012012".
+f_prepara_trimestre <- function(v_tri, d_defl) {
+  v_tri_n <- as.integer(substr(v_tri, 1, 2))
+  v_ano   <- as.integer(substr(v_tri, 3, 6))
+  antes_4t2015 <- v_ano < 2015 || (v_ano == 2015 && v_tri_n <= 3)
+
+  arq_local <- file.path(DIR_PNADCT, paste0("PNADCT_", v_tri, ".gz"))
+
+  if (file.exists(arq_local)) {
+    d <- suppressWarnings(
+      data.table::fread(arq_local, select = COLS_PNADCT, showProgress = FALSE))
+  } else {
+    # Trimestre ainda nao processado localmente: busca pelo PNADcIBGE, sem
+    # gravar o download. Exige internet.
+    message("  baixando ", v_tri, " pelo PNADcIBGE")
+    d <- PNADcIBGE::get_pnadc(year = v_ano, quarter = v_tri_n,
+                              vars = setdiff(COLS_PNADCT,
+                                             c("Ano", "Trimestre", "UF")),
+                              design = FALSE, labels = FALSE,
+                              savedir = tempdir())
+    d <- as.data.table(d)
+    faltando <- setdiff(COLS_PNADCT, names(d))
+    if (length(faltando)) {
+      stop("PNADcIBGE devolveu o trimestre ", v_tri, " sem as colunas: ",
+           paste(faltando, collapse = ", "))
+    }
+    d <- d[, ..COLS_PNADCT]
+    for (cc in setdiff(COLS_PNADCT, character(0))) {
+      set(d, j = cc, value = as.numeric(d[[cc]]))
+    }
+  }
+
+  d <- merge(d, d_defl, by = c("Ano", "Trimestre", "UF"))
+  if (nrow(d) == 0) {
+    stop("Trimestre ", v_tri, " ficou sem linhas apos o merge com o deflator. ",
+         "Microdado ausente ou fora da cobertura do deflator.")
+  }
+  d[, w := V1028]
+
+  d[, subocupado := as.integer(if (antes_4t2015) VD4004 %in% 1 else VD4004A %in% 1)]
+  d[, afastado_doenca := as.integer(if (antes_4t2015) V4006 %in% 3 else V4006A %in% 3)]
+
+  # Tempo no trabalho atual, em meses. As tres variaveis sao excludentes:
+  # V40401 de 1 a 11 meses, V40402 de 1 a menos de 2 anos, V40403 2 anos ou mais.
+  d[, tempo_ocupacao := V40403 * 12]
+  d[V40402 > 0, tempo_ocupacao := V40402 + 12]
+  d[V40401 > 0, tempo_ocupacao := V40401]
+
+  d[, renda_real := VD4019 * Habitual]
+  d[, renda_hora := renda_real / VD4031]
+
+  # Formalidade: empregados com carteira, militares e estatutarios;
+  # conta-propria que contribui; empregador que contribui (ate 3T2015) ou com
+  # CNPJ (a partir do 4T2015).
+  d[, formalizado := as.integer(VD4009 %in% c(1, 3, 5, 7))]
+  d[VD4009 %in% 9 & VD4012 %in% 1, formalizado := 1L]
+  if (antes_4t2015) {
+    d[VD4009 %in% 8 & VD4012 %in% 1, formalizado := 1L]
+  } else {
+    d[VD4009 %in% 8 & V4019 %in% 1, formalizado := 1L]
+  }
+
+  d[]
+}
+```
+
+## Cálculo dos indicadores
+
+As fórmulas estão na Seção 1 da documentação metodológica, com a numeração
+citada em cada bloco.
+
+```{r pnadct-funcoes-indicadores}
+f_indicadores_trimestre <- function(d) {
+
+  ft   <- d[VD4001 %in% 1, sum(w)]   # forca de trabalho
+  ocup <- d[VD4002 %in% 1, sum(w)]   # pessoas ocupadas
+  ftp  <- d[VD4003 %in% 1, sum(w)]   # forca de trabalho potencial
+
+  # (1.1) subocupados, desocupados e FT potencial sobre a FT ampliada
+  subutilizado <- d[subocupado %in% 1 | VD4002 %in% 2 | VD4003 %in% 1, sum(w)]
+
+  # (1.14) Palma: massa do decimo superior sobre a dos quatro inferiores.
+  # Usa quantis ponderados como corte, o que evita o problema de decimos
+  # repetidos na cauda inferior.
+  dp <- d[renda_real > 0]
+  cortes <- Hmisc::wtd.quantile(dp$renda_real, weights = dp$w, probs = c(0.4, 0.9))
+  palma  <- dp[renda_real >= cortes[2], sum(w * renda_real)] /
+            dp[renda_real <  cortes[1], sum(w * renda_real)]
+
+  # (1.16) VD4011 == 1 sao diretores e gerentes
+  direcao <- d[VD4002 %in% 1 & VD4011 %in% 1, sum(w)]
+
+  data.table(
+    Ano       = d$Ano[1],
+    Trimestre = d$Trimestre[1],
+
+    # series do IDH-T
+    TxCompostaSubutilizacao    = subutilizado / (ft + ftp),
+    PrevidenciaTodosTrab       = d[VD4012 %in% 1, sum(w)] / ft,
+    CarteiraTrabAssalariados   = d[VD4009 %in% c(1, 3, 5, 7), sum(w)] /
+                                 d[VD4009 %in% 1:7, sum(w)],
+    EstabilidadeEmpregoPrivado = d[tempo_ocupacao >= 12 & VD4009 %in% c(1, 3), sum(w)] /
+                                 d[VD4009 %in% c(1, 3), sum(w)],
+    TxOcupadosRendaAbaixoPOF   = d[!is.na(renda_hora) &
+                                   renda_hora <= V_LINHA_POF_HORA, sum(w)] / ocup,
+    RendimentoRealMedio        = d[!is.na(renda_real), weighted.mean(renda_real, w)],
+    TxJornadaAcima44h          = d[VD4031 > V_JORNADA_MAX, sum(w)] / ft,
+
+    # demais series do feixe
+    Tx_formalizacao             = d[formalizado %in% 1, sum(w)] / ocup,
+    Gini_rendahabTodosTrabalhos = d[!is.na(renda_real), reldist::gini(renda_real, w)],
+    Palma90_40_Massa_TodosTrab  = palma,
+    RendimentoRealMedio_SexoCor = d[V2010 %in% c(2, 4) & V2007 %in% 2 & !is.na(renda_real),
+                                    weighted.mean(renda_real, w)] /
+                                  d[V2010 %in% 1 & V2007 %in% 1 & !is.na(renda_real),
+                                    weighted.mean(renda_real, w)],
+    PostosDirecao_MulheresNegras = d[VD4002 %in% 1 & VD4011 %in% 1 &
+                                     V2010 %in% c(2, 4) & V2007 %in% 2, sum(w)] / direcao,
+    AfastamentoRemunerado        = d[afastado_doenca %in% 1, sum(w)] / ocup,
+
+    # insumo do indicador de acidentes (R/09_inss.Rmd): assalariados formais do
+    # setor privado, exceto domesticos, mais empregadores e conta-propria que
+    # contribuem para a previdencia
+    PopulacaoSeguradaINSS = d[VD4009 %in% 1 |
+                              (VD4009 %in% c(8, 9) & VD4012 %in% 1), sum(w)])
+}
+
+#' Processa um trimestre, com cache em disco.
+#' Devolve NULL quando o trimestre nao pode ser calculado, sem gravar cache:
+#' assim um trimestre indisponivel nao entra na serie nem trava a rodada.
+f_processa_trimestre <- function(v_tri) {
+  data.table::setDTthreads(2)
+  arq <- file.path(DIR_CACHE, paste0(v_tri, ".rds"))
+  if (file.exists(arq) && !REFAZER_PNADCT) return(readRDS(arq))
+
+  r <- tryCatch(
+    f_indicadores_trimestre(f_prepara_trimestre(v_tri, DEFLATOR)),
+    error = function(e) {
+      warning("Trimestre ", v_tri, " nao processado: ", conditionMessage(e),
+              call. = FALSE, immediate. = TRUE)
+      NULL
+    })
+
+  if (is.null(r) || is.na(r$Ano[1])) return(NULL)
+  saveRDS(r, arq)
+  r
+}
+```
+
+## Execução
+
+```{r pnadct-execucao}
+# Trimestres com microdado local, mais os que faltam ate o ultimo trimestre
+# coberto pelo deflator. Sem deflator nao ha como calcular rendimento, entao o
+# limite da serie e a cobertura do arquivo de deflatores.
+l_local    <- f_lista_trimestres()
+l_cobertos <- DEFLATOR[Ano >= ANO_INICIO,
+                       unique(paste0(sprintf("%02d", Trimestre), Ano))]
+l_cobertos <- l_cobertos[order(substr(l_cobertos, 3, 6), substr(l_cobertos, 1, 2))]
+
+l_tri   <- l_cobertos
+l_baixar <- setdiff(l_tri, l_local)
+
+message("trimestres a processar: ", length(l_tri))
+if (length(l_baixar)) {
+  message("sem microdado local, serao buscados pelo PNADcIBGE: ",
+          paste(l_baixar, collapse = ", "))
+}
+fora_deflator <- setdiff(l_local, l_cobertos)
+if (length(fora_deflator)) {
+  message("microdado local sem cobertura do deflator, ignorados: ",
+          paste(fora_deflator, collapse = ", "))
+}
+
+future::plan(future::multisession, workers = N_WORKERS)
+resultado <- rbindlist(future.apply::future_lapply(
+  l_tri, f_processa_trimestre,
+  future.packages = c("data.table", "Hmisc", "reldist", "PNADcIBGE"),
+  future.globals = TRUE, future.seed = TRUE))
+future::plan(future::sequential)
+
+resultado[, data := f_data_tri(Ano, Trimestre)]
+setorder(resultado, data)
+resultado[, .(trimestres = .N, de = min(data), ate = max(data))]
+```
+
+## Validação
+
+Faixas plausíveis por tipo de indicador. Proporções entre 0 e 1, rendimento em
+reais, razões e índices de desigualdade em faixa própria. Saltos entre
+trimestres vizinhos acima do limite geram aviso, para flagrar quebra de série.
+
+```{r pnadct-validacao}
+l_regras <- list(
+  TxCompostaSubutilizacao      = list(faixa = c(0, 0.5),  var_max = 0.05),
+  PrevidenciaTodosTrab         = list(faixa = c(0, 1),    var_max = 0.05),
+  CarteiraTrabAssalariados     = list(faixa = c(0, 1),    var_max = 0.05),
+  EstabilidadeEmpregoPrivado   = list(faixa = c(0, 1),    var_max = 0.08),
+  TxOcupadosRendaAbaixoPOF     = list(faixa = c(0, 1),    var_max = 0.08),
+  RendimentoRealMedio          = list(faixa = c(500, 1e4), var_max = 500),
+  TxJornadaAcima44h            = list(faixa = c(0, 0.5),  var_max = 0.05),
+  Tx_formalizacao              = list(faixa = c(0, 1),    var_max = 0.05),
+  Gini_rendahabTodosTrabalhos  = list(faixa = c(0.3, 0.7), var_max = 0.05),
+  Palma90_40_Massa_TodosTrab   = list(faixa = c(1, 30),   var_max = 5),
+  RendimentoRealMedio_SexoCor  = list(faixa = c(0.2, 1.2), var_max = 0.1),
+  PostosDirecao_MulheresNegras = list(faixa = c(0, 0.5),  var_max = 0.05),
+  AfastamentoRemunerado        = list(faixa = c(0, 0.2),  var_max = 0.03),
+  PopulacaoSeguradaINSS        = list(faixa = c(1e7, 1e8), var_max = 5e6))
+
+for (s in names(l_regras)) {
+  f_valida_serie(resultado[, .(data, valor = get(s))], s,
+                 faixa   = l_regras[[s]]$faixa,
+                 var_max = l_regras[[s]]$var_max,
+                 freq    = "quarter")
+}
+message("validacao concluida para ", length(l_regras), " series")
+```
+
+## Saída
+
+```{r pnadct-saida}
+series_pnadct <- setdiff(names(resultado), c("Ano", "Trimestre", "data"))
+for (s in series_pnadct) f_grava_serie(resultado[, .(data, valor = get(s))], s)
+
+# Graficos de conferencia. As series que nao sao proporcao saem com escala livre.
+nao_percentuais <- c("RendimentoRealMedio", "PopulacaoSeguradaINSS",
+                     "Gini_rendahabTodosTrabalhos", "Palma90_40_Massa_TodosTrab",
+                     "RendimentoRealMedio_SexoCor")
+for (s in series_pnadct) {
+  f_grafico_serie(f_le_serie(s), s, titulo = s,
+                  percentual = !(s %in% nao_percentuais))
+}
+```
+
+```{r pnadct-grafico-principal, echo=FALSE}
+f_grafico_serie(f_le_serie("TxCompostaSubutilizacao"),
+                "TxCompostaSubutilizacao",
+                titulo = "Taxa composta de subutilizacao")
+```

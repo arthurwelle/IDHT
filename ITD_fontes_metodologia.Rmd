@@ -1,0 +1,911 @@
+---
+title: "Projeto Índice Trabalho Decente (ITD)"
+subtitle: "Fontes, indicadores e metodologia de cálculo do IDH-T"
+author: "Arthur Welle  \nCESIT, Centro de Estudos Sindicais e Economia do Trabalho  \nInstituto de Economia, Unicamp"
+date: "`r paste0('Última atualização - ', format(Sys.time(), '%d/%m/%Y'))`"
+output:
+  pdf_document:
+    toc: TRUE
+    toc_depth: 3
+    number_sections: FALSE
+linestretch: 1.2
+link-citations: yes
+linkcolor: blue
+citecolor: blue
+header-includes:
+  - \usepackage{hyperref}
+  - \usepackage{float}
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage[brazilian]{babel}
+  - \usepackage{indentfirst}
+  - \usepackage{xcolor}
+---
+
+\renewcommand{\paragraph}[1]{\vspace{3mm}\par\noindent{\bfseries #1}\par\noindent}
+
+\renewcommand{\contentsname}{Índice}
+
+\tableofcontents
+
+\pagebreak
+
+```{r setup, include=FALSE}
+# Autor: Arthur Welle
+# E-mail: arthurwelle@gmail.com
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.height = 5, fig.width = 8, fig.align = "center")
+
+img_out_width <- "400px"
+
+options(scipen = 999)
+options(knitr.kable.NA = "")
+
+library(data.table)
+library(tidyverse)
+library(kableExtra)
+
+f_kable <- function(x, v_titulo = "Título") {
+  knitr::kable(x,
+               format    = "latex",
+               booktabs  = TRUE,
+               longtable = TRUE,
+               caption   = v_titulo) |>
+    kableExtra::kable_styling(latex_options = c("hold_position", "repeat_header"),
+                              font_size = 8)
+}
+
+# Figuras da Secao 1, uma por indicador, copiadas para dentro do pacote em
+# IMG_doc/ para que este documento compile sem depender de pasta externa.
+f_img <- function(v_name) {
+  knitr::include_graphics(paste0("IMG_doc/", v_name, ".png"))
+}
+```
+
+\hypertarget{ITD_Sec_0}{}
+
+# Apresentação
+
+Este documento reúne, em um só lugar, **o que é preciso saber para reproduzir o feixe de indicadores do Projeto Índice do Trabalho Decente (ITD) e o índice sintético IDH-T**. Ele foi escrito para a equipe que vai colocar o indicador em produção e substitui, para esse fim, a leitura dos relatórios de acompanhamento do projeto.
+
+A Seção 1 descreve **cada indicador do feixe**: fonte, periodicidade, polaridade, variáveis exatas usadas, fórmula de cálculo, quebras de série e cuidados de interpretação. A Seção 2 descreve o **cálculo do IDH-T na sua versão final**, passo a passo, com a lista das variáveis que entram, a normalização e a ponderação.
+
+Duas convenções valem para todo o documento:
+
+- **Polaridade** indica o sentido do indicador em relação ao trabalho decente. Positiva significa que valores maiores são melhores; negativa, que valores maiores são piores. A polaridade é usada na Seção 2, na hora de agregar.
+- **Nome da série** é o identificador usado nos arquivos de saída do projeto (por exemplo `PNADCT_TxCompostaSubutilizacao`). É por esse nome que a série é referenciada no cálculo do índice.
+
+**Dois avisos sobre o escopo.** Primeiro, o feixe tem 21 indicadores, mas apenas 9 entram no IDH-T final. Os demais permanecem como painel de acompanhamento, e a Seção 2 indica quais são os 9. Segundo, o processo de *escolha* desses 9 (análise de componentes principais, consulta a especialistas, testes de sensibilidade) não é tratado aqui: ele está documentado no artigo do projeto e em seu anexo metodológico. Este documento cobre o que é preciso para **recalcular**, não para **redecidir**.
+
+\hypertarget{ITD_Sec_0_1}{}
+
+## Convenções da PNAD Contínua Trimestral
+
+A maior parte dos indicadores vem dos microdados da PNAD Contínua Trimestral (PNADC-T) do IBGE. Valem para todos eles:
+
+- **Peso amostral:** `V1028`. Toda proporção, média ou total é ponderada por ele. Para estimar erro padrão, usar os pesos replicados `V1028001` a `V1028200` com `survey::svrepdesign(type = "bootstrap")`. As séries publicadas trazem o ponto estimado, sem intervalo.
+- **Deflatores:** o arquivo `Deflatores.zip`, distribuído junto com os microdados, traz os fatores `Habitual` e `Efetivo` por Ano, Trimestre e UF. Rendimentos habituais são multiplicados por `Habitual`; rendimentos efetivos, por `Efetivo`. Os valores ficam a preços do trimestre de referência do deflator, que muda a cada atualização do arquivo. **Ao atualizar o deflator, toda a série de rendimentos precisa ser recalculada.**
+- **Recortes de população** usados com frequência nas fórmulas abaixo:
+    - *Força de trabalho*: `VD4001 == 1`;
+    - *Ocupados*: `VD4002 == 1`; *desocupados*: `VD4002 == 2`;
+    - *Força de trabalho potencial*: `VD4003 == 1`;
+    - *Força de trabalho ampliada*: `VD4001 == 1` ou `VD4003 == 1`.
+- **Posição na ocupação** (`VD4009`), usada em vários indicadores: 1 empregado privado com carteira; 2 empregado privado sem carteira; 3 doméstico com carteira; 4 doméstico sem carteira; 5 empregado público com carteira; 6 empregado público sem carteira; 7 militar e estatutário; 8 empregador; 9 conta-própria; 10 trabalhador familiar auxiliar.
+
+\pagebreak
+
+\hypertarget{ITD_Sec_1}{}
+
+# 1. Feixe de indicadores
+
+\hypertarget{ITD_Sec_1_1}{}
+
+## 1.1. Taxa composta de subutilização da força de trabalho
+
+**Fonte:** PNADC-T (IBGE). **Frequência:** trimestral. **Polaridade:** negativa. **Série:** `PNADCT_TxCompostaSubutilizacao`. **Dimensão:** ocupação suficiente.
+
+#### Figura 1.1. Taxa composta de subutilização
+
+```{r itd-fig-subutilizacao, out.width = img_out_width}
+f_img("PNADCT_TxCompostaSubutilizacao")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+**Variáveis:** `VD4004` (até 3T2015) ou `VD4004A` (a partir de 4T2015), `VD4002`, `VD4001`, `VD4003`, `V1028`.
+
+**Cálculo.** Define-se a marca de subutilização no nível da pessoa:
+
+$$\text{subutilizado}_i = 1 \text{ se } (\text{subocupado}_i = 1) \text{ ou } (VD4002_i = 2) \text{ ou } (VD4003_i = 1)$$
+
+e o indicador é
+
+$$\text{Taxa} = \frac{\sum_i w_i \cdot \text{subutilizado}_i}{\sum_i w_i \cdot [VD4001_i = 1] + \sum_i w_i \cdot [VD4003_i = 1]}$$
+
+com $w_i = V1028$. O denominador é a força de trabalho ampliada.
+
+**O que entra no numerador:** subocupados por insuficiência de horas, desocupados e pessoas na força de trabalho potencial. A força de trabalho potencial reúne quem procurou trabalho mas não estava disponível e quem não procurou mas gostaria e estava disponível (aqui incluídos, entre outros, os desalentados).
+
+**Quebra de série.** A partir do 4T2015 a subocupação por insuficiência de horas passou a usar horas habitualmente trabalhadas (`VD4004A`) em vez de horas efetivas (`VD4004`). O código seleciona a variável conforme o trimestre. A quebra é do IBGE e não tem correção: é preciso informá-la a quem lê a série.
+
+**Leitura.** É o indicador que melhor resume a insuficiência de demanda por trabalho, porque percorre ocupados, desocupados e pessoas fora da força de trabalho.
+
+\hypertarget{ITD_Sec_1_2}{}
+
+## 1.2. Contribuição à previdência
+
+**Fonte:** PNADC-T. **Frequência:** trimestral. **Polaridade:** positiva. **Série:** `PNADCT_PrevidenciaTodosTrab`. **Dimensão:** acesso a direitos.
+
+#### Figura 1.2. Contribuição à previdência
+
+```{r itd-fig-previdencia, out.width = img_out_width}
+f_img("PNADCT_PrevidenciaTodosTrab")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+**Variáveis:** `VD4012` (1 contribuinte, 2 não contribuinte), `VD4001`, `V1028`.
+
+**Cálculo.**
+
+$$\text{Taxa} = \frac{\sum_i w_i \cdot [VD4012_i = 1]}{\sum_i w_i \cdot [VD4001_i = 1]}$$
+
+**Denominador.** É a **força de trabalho**, e não apenas a população ocupada. A leitura é, portanto, a da cobertura previdenciária no conjunto de quem está no mercado de trabalho, incluindo os desocupados.
+
+\hypertarget{ITD_Sec_1_3}{}
+
+## 1.3. Carteira de trabalho entre os assalariados
+
+**Fonte:** PNADC-T. **Frequência:** trimestral. **Polaridade:** positiva. **Série:** `PNADCT_CarteiraTrabAssalariados`. **Dimensão:** acesso a direitos.
+
+#### Figura 1.3. Carteira de trabalho entre os assalariados
+
+```{r itd-fig-carteira, out.width = img_out_width}
+f_img("PNADCT_CarteiraTrabAssalariados")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+**Variáveis:** `VD4009`, `V1028`.
+
+**Cálculo.**
+
+$$\text{Taxa} = \frac{\sum_i w_i \cdot [VD4009_i \in \{1, 3, 5, 7\}]}{\sum_i w_i \cdot [VD4009_i \in \{1, \ldots, 7\}]}$$
+
+**Definições.** O numerador reúne empregados com carteira (privado, doméstico e público) mais militares e estatutários. O denominador é o conjunto dos assalariados, com e sem carteira, incluindo militares e estatutários. Empregadores, conta-própria e trabalhadores familiares auxiliares ficam fora dos dois lados.
+
+**Nota.** O denominador não é a população ocupada. É uma escolha deliberada: o indicador mede a formalização *dentro* do assalariamento.
+
+\hypertarget{ITD_Sec_1_4}{}
+
+## 1.4. Estabilidade no emprego na economia formal privada
+
+**Fonte:** PNADC-T. **Frequência:** trimestral. **Polaridade:** positiva. **Série:** `PNADCT_AcessoSeguroDesempregoAssal`. **Dimensão:** acesso a direitos.
+
+#### Figura 1.4. Estabilidade no emprego formal privado
+
+```{r itd-fig-estabilidade, out.width = img_out_width}
+f_img("PNADCT_AcessoSeguroDesempregoAssal")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+**Variáveis:** `V40401`, `V40402`, `V40403` (tempo no trabalho atual), `VD4009`, `V1028`.
+
+**Construção do tempo de ocupação, em meses:**
+
+```
+TempoOcupacao = V40403 * 12
+TempoOcupacao = V40402 + 12   quando V40402 > 0
+TempoOcupacao = V40401        quando V40401 > 0
+```
+
+As três variáveis são mutuamente excludentes na PNADC: `V40401` cobre de 1 a 11 meses, `V40402` de 1 ano a menos de 2 anos, e `V40403` 2 anos ou mais.
+
+**Cálculo.**
+
+$$\text{Taxa} = \frac{\sum_i w_i \cdot [\text{TempoOcupacao}_i \geq 12] \cdot [VD4009_i \in \{1, 3\}]}{\sum_i w_i \cdot [VD4009_i \in \{1, 3\}]}$$
+
+Ou seja: entre empregados com carteira do setor privado (inclusive domésticos), a proporção com pelo menos 12 meses no vínculo atual.
+
+**Leitura.** É uma aproximação da rotatividade e do requisito inicial de acesso ao seguro-desemprego, que exige pelo menos 12 meses de vínculo na primeira solicitação (a PNADC não permite verificar os demais requisitos, como a dispensa sem justa causa). A série acompanha o ciclo econômico e fica distorcida em 2020 e 2021, quando a saída de trabalhadores da ocupação e os programas de manutenção do emprego elevaram artificialmente o tempo médio de vínculo.
+
+\hypertarget{ITD_Sec_1_5}{}
+
+## 1.5. Novos processos trabalhistas sobre desligamentos
+
+**Fonte:** TST (numerador) e CAGED/Novo CAGED (denominador). **Frequência:** mensal. **Polaridade:** negativa. **Série:** `TST_NovasAcoes_sobre_Demitidos`. **Dimensão:** acesso a direitos.
+
+#### Figura 1.5. Novas ações trabalhistas sobre desligamentos
+
+```{r itd-fig-tst, out.width = img_out_width}
+f_img("TST_NovasAcoes_sobre_Demitidos")
+```
+
+\footnotesize Fonte: TST e CAGED. Elaboração própria. \normalsize
+
+**Cálculo.**
+
+$$\text{Indicador}_t = \frac{\text{MM}_{12}(\text{casos novos nas Varas do Trabalho})_t}{\text{MM}_{12}(\text{desligamentos})_t}$$
+
+com $\text{MM}_{12}$ indicando média móvel de 12 meses aplicada separadamente ao numerador e ao denominador.
+
+**Montagem da série do TST.** Os dados mensais de casos novos existem a partir de 2018, no portal de estatísticas do TST. Antes disso há apenas totais anuais. A solução adotada foi mensalizar os anos anteriores usando o formato (a sazonalidade) obtido de fontes secundárias e ajustando o nível por um fator de compatibilização, calculado como a razão entre a soma dos valores do TST e a soma da série auxiliar no período em que as duas coexistem (2014 a 2018).
+
+**Cuidado.** Essa emenda é a parte mais frágil do feixe. Ao colocar em produção, o recomendável é usar somente o período com dados mensais oficiais do TST e tratar o trecho anterior como estimativa, sinalizada como tal.
+
+\hypertarget{ITD_Sec_1_6}{}
+
+## 1.6. Pessoas com mais de 65 anos com renda de aposentadoria ou pensão
+
+**Fonte:** PNADC Anual (IBGE). **Frequência:** anual, trimestralizada por interpolação. **Polaridade:** positiva. **Série:** `PNADCA_PropoRendaApposentadoriaAcima65anos`. **Dimensão:** acesso a direitos.
+
+#### Figura 1.6. Pessoas com mais de 65 anos com previdência
+
+```{r itd-fig-65anos, out.width = img_out_width}
+f_img("PNADCT_PropoRendaApposentadoriaAcima65anos")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Anual. Elaboração própria. \normalsize
+
+**Variáveis:** `V50011` (recebeu aposentadoria de instituto de previdência), `V50021` (recebeu pensão), `V2009` (idade), `V1032` (peso da visita anual).
+
+**Cálculo.**
+
+$$\text{Taxa}_{ano} = \frac{\sum_i w_i \cdot [\text{idade}_i \geq 65] \cdot [V50011_i = 1 \text{ ou } V50021_i = 1]}{\sum_i w_i \cdot [\text{idade}_i \geq 65]}$$
+
+**Qual visita usar.** A variável de outras fontes de renda só existe na PNADC Anual. Usa-se a **primeira visita** em todos os anos disponíveis e a **quinta visita** em 2020 e 2021, porque a primeira visita desses dois anos foi a campo por telefone e seus microdados não foram divulgados. Os códigos das variáveis de rendimento mudam entre visitas e entre anos, o que exige rotinas separadas por período: verificar o dicionário do ano antes de rodar.
+
+**Leitura.** Não é um indicador do mercado de trabalho atual. Reflete o mercado de trabalho passado e a rede de proteção social vigente, que determinam a necessidade de trabalhar na velhice.
+
+\hypertarget{ITD_Sec_1_7}{}
+
+## 1.7. Taxa de formalização
+
+**Fonte:** PNADC-T. **Frequência:** trimestral. **Polaridade:** positiva. **Série:** `PNADCT_Tx_formalizacao`. **Dimensão:** acesso a direitos.
+
+#### Figura 1.7. Taxa de formalização
+
+```{r itd-fig-formalizacao, out.width = img_out_width}
+f_img("PNADCT_Tx_formalizacao")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+**Variáveis:** `VD4009`, `VD4012`, `V4019` (CNPJ do negócio), `VD4002`, `V1028`.
+
+**Marca de formalidade no nível da pessoa:**
+
+```
+formalizado = 1 se VD4009 em (1, 3, 5, 7)      # empregados com carteira, militares e estatutarios
+formalizado = 1 se VD4009 == 9 e VD4012 == 1   # conta-propria que contribui
+formalizado = 1 se VD4009 == 8 e VD4012 == 1   # empregador, ate 3T2015
+formalizado = 1 se VD4009 == 8 e V4019 == 1    # empregador, a partir de 4T2015 (com CNPJ)
+```
+
+**Cálculo.**
+
+$$\text{Taxa} = \frac{\sum_i w_i \cdot \text{formalizado}_i}{\sum_i w_i \cdot [VD4002_i = 1]}$$
+
+O denominador é a população ocupada.
+
+**Quebra de série.** O critério para empregadores muda no 4T2015, quando a variável de CNPJ passa a estar disponível. O degrau é pequeno, mas existe.
+
+**Nota.** A taxa de formalização é, de forma aproximada, a junção dos indicadores 1.2 e 1.3. Se o índice final usar os três, há redundância a considerar.
+
+\hypertarget{ITD_Sec_1_8}{}
+
+## 1.8. Ocupados com rendimento abaixo da renda necessária (POF)
+
+**Fonte:** PNADC-T e POF 2017-2018 (IBGE); IPCA para deflacionar a linha. **Frequência:** trimestral. **Polaridade:** negativa. **Série:** `PNADCT_TxOcupadosRendaAbaixoPOF`. **Dimensão:** qualidade, remuneração.
+
+#### Figura 1.8. Ocupados com renda abaixo da linha da POF
+
+```{r itd-fig-pof, out.width = img_out_width}
+f_img("PNADCT_TxOcupadosRendaAbaixoPOF")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral e POF 2017-2018. Elaboração própria. \normalsize
+
+#### Figura 1.9. Renda necessária e renda efetiva por vigésimo, POF 2017-2018
+
+```{r itd-fig-pof-vintesimos, out.width = img_out_width}
+f_img("POF_RendaNecessaria_RendaEfetiva_Vintesimos")
+```
+
+\footnotesize Fonte: IBGE, POF 2017-2018. Elaboração própria. \normalsize
+
+**Como a linha é construída.** Na POF, cada domicílio declara a renda que considera necessária para viver. Comparando, por vigésimo de renda domiciliar per capita, a renda necessária declarada com a renda efetiva, encontra-se o ponto em que as duas se cruzam, isto é, o nível a partir do qual a renda efetiva passa a superar a necessária. Esse ponto é **R\$ 885,00** a preços da POF 2017-2018. O valor é atualizado pelo IPCA (série 433 do SGS do Banco Central) para a base de preços do deflator da PNADC em uso, a cada rodada: com o deflator de maio de 2026, a linha é de **R\$ 1.375,28**. Em seguida, supondo jornada de 44 horas semanais, converte-se a linha em **renda por hora**.
+
+**Cálculo na PNADC.**
+
+$$\text{renda por hora}_i = \frac{VD4019_i \times \text{Habitual}}{VD4031_i}$$
+
+$$\text{Taxa} = \frac{\sum_i w_i \cdot [\text{renda por hora}_i \leq \text{linha}]}{\sum_i w_i \cdot [VD4002_i = 1]}$$
+
+**Pontos de atenção.**
+
+- A linha é fixa em termos reais: ao atualizar o deflator da PNADC, atualizar também o valor da linha para a mesma base de preços. Se isso não for feito, a série passa a medir inflação, e não privação.
+- O denominador é a **população ocupada** (`VD4002 == 1`), coerente com um numerador que só pode conter pessoas com rendimento do trabalho.
+- É uma *proxy*. Não considera as demais rendas do domicílio nem a composição familiar. O valor encontrado está abaixo do salário mínimo vigente em 2024.
+
+\hypertarget{ITD_Sec_1_9}{}
+
+## 1.9. Rendimento real médio
+
+**Fonte:** PNADC-T. **Frequência:** trimestral. **Polaridade:** positiva. **Série:** `PNADCT_RendimentoRealMedio`. **Dimensão:** qualidade, remuneração.
+
+#### Figura 1.10. Rendimento real médio
+
+```{r itd-fig-rendimento, out.width = img_out_width}
+f_img("PNADCT_RendimentoRealMedio")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+**Variáveis:** `VD4019` (rendimento habitual de todos os trabalhos), deflator `Habitual`, `V1028`.
+
+**Cálculo.**
+
+$$\text{Rendimento médio} = \frac{\sum_i w_i \cdot (VD4019_i \times \text{Habitual})}{\sum_i w_i}$$
+
+calculado sobre quem tem rendimento declarado.
+
+**Cuidado com a pandemia.** Em 2020 a saída de ocupados de menor rendimento elevou a média sem que houvesse melhora de remuneração. O movimento é de composição, e o indicador não corrige isso.
+
+\hypertarget{ITD_Sec_1_10}{}
+
+## 1.10. Salário mínimo real
+
+**Fonte:** IPEADATA. **Frequência:** mensal. **Polaridade:** positiva. **Série:** `IPEA_SalarioMinimoReal`. **Dimensão:** qualidade, remuneração.
+
+#### Figura 1.11. Salário mínimo real
+
+```{r itd-fig-sm, out.width = img_out_width}
+f_img("IPEA_SalarioMinimoReal")
+```
+
+\footnotesize Fonte: IPEADATA. Elaboração própria. \normalsize
+
+**Obtenção.** Pacote `ipeadatar`, série **`GAC12_SALMINRE12`**: salário mínimo nominal deflacionado pelo INPC, em reais constantes do último mês da série. O projeto usa a série a partir de 2012 e acrescenta uma média móvel de 12 meses para suavizar os degraus anuais de reajuste.
+
+**Nota.** A série muda de base a cada atualização, porque o IPEA traz os valores para o mês mais recente. Isso não afeta o índice, já que a normalização usada na Seção 2 é invariante a mudanças de escala, mas afeta a comparação de valores absolutos entre versões.
+
+\hypertarget{ITD_Sec_1_11}{}
+
+## 1.11. Participação dos rendimentos do trabalho no PIB
+
+**Fonte:** PNADC-T (massa de rendimentos, via SIDRA) e Contas Nacionais Trimestrais (IBGE). **Frequência:** trimestral. **Polaridade:** positiva. **Série:** `PNADCT_MassaRendaHabTodosTrab_noPIB`. **Dimensão:** qualidade, remuneração.
+
+#### Figura 1.12. Massa de rendimentos sobre o PIB
+
+```{r itd-fig-massa, out.width = img_out_width}
+f_img("PNADCT_MassaRendaHabTodosTrab_noPIB")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral e Contas Nacionais Trimestrais. Elaboração própria. \normalsize
+
+**Obtenção.**
+
+- Numerador: SIDRA, **tabela 5606, variável 6293** (massa de rendimento mensal real habitual de todos os trabalhos). No R: `sidrar::get_sidra(api = "/t/5606/n1/all/v/6293/p/all")`.
+- Denominador: PIB a valores correntes das Contas Nacionais Trimestrais, aba "Valores Correntes" do arquivo `Tab_Compl_CNT.zip` do FTP do IBGE, deflacionado pelo IPCA para a mesma base de preços do numerador.
+
+**Cálculo.**
+
+$$\text{Participação}_t = \frac{\text{massa de rendimentos real}_t}{\text{PIB real}_t}$$
+
+**Cuidado.** Numerador e denominador têm origens metodológicas distintas (pesquisa domiciliar e contas nacionais). O nível da razão não deve ser lido como participação dos salários na renda no sentido das contas nacionais; o que interessa é a variação ao longo do tempo. A leitura do arquivo das Contas Nacionais depende do layout da planilha, que muda de posição de linha a cada divulgação: confira o `skip` e a coluna do PIB a cada atualização.
+
+\hypertarget{ITD_Sec_1_12}{}
+
+## 1.12. Ocupados com jornada acima de 44 horas semanais
+
+**Fonte:** PNADC-T. **Frequência:** trimestral. **Polaridade:** negativa. **Série:** `PNADCT_TxJornadaAcima44h`. **Dimensão:** qualidade, jornada.
+
+#### Figura 1.13. Jornada acima de 44 horas
+
+```{r itd-fig-jornada, out.width = img_out_width}
+f_img("PNADCT_TxJornadaAcima44h")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+**Variáveis:** `VD4031` (horas habitualmente trabalhadas por semana em todos os trabalhos), `VD4001`, `V1028`.
+
+**Cálculo.**
+
+$$\text{Taxa} = \frac{\sum_i w_i \cdot [VD4031_i > 44]}{\sum_i w_i \cdot [VD4001_i = 1]}$$
+
+**Variantes disponíveis no projeto.** Existem também `PNADCT_TxJornadaAcima40h`, com o corte em 40 horas, e `PNADCT_TxSubocupadasJornadaAcima44h`, que soma no numerador os subocupados por insuficiência de horas, tratando as duas pontas da jornada como problema. A versão usada no índice final é a de 44 horas, por ser o limite constitucional.
+
+\hypertarget{ITD_Sec_1_13}{}
+
+## 1.13. Contratos atípicos entre os admitidos
+
+**Fonte:** CAGED (2007 a 2019) e Novo CAGED (2020 em diante), MTE; definição conforme nota técnica da RAIS. **Frequência:** mensal. **Polaridade:** negativa. **Série:** `CAGED_Admitidos_ContratosAtipicos`. **Dimensão:** qualidade, forma de contratação.
+
+#### Figura 1.14. Contratos atípicos entre os admitidos
+
+```{r itd-fig-atipicos, out.width = img_out_width}
+f_img("CAGED_Admitiodos_ContratosAtipicos")
+```
+
+\footnotesize Fonte: CAGED e Novo CAGED (MTE). Elaboração própria. \normalsize
+
+**Definição de vínculo atípico:** aprendizes, intermitentes, temporários, contratos de até 30 horas semanais e contratados por empregador pessoa física equiparada a jurídica (exceto construção civil, CNAE 41 a 43, no CAGED antigo).
+
+**Extração.** As consultas são feitas sobre o espelho do CAGED na Base dos Dados (BigQuery). Novo CAGED:
+
+```sql
+SELECT ano, mes, COUNT(*) AS N
+FROM `basedosdados.br_me_caged.microdados_movimentacao`
+WHERE saldo_movimentacao = 1
+  AND (horas_contratuais < 30
+       OR indicador_aprendiz = '01'
+       OR indicador_trabalho_parcial = '01'
+       OR indicador_trabalho_intermitente = '01'
+       OR tipo_estabelecimento = '03')
+GROUP BY ano, mes
+```
+
+A mesma consulta sem o bloco `AND (...)` fornece o total de admitidos, que é o denominador. Para o CAGED antigo, a tabela é `microdados_antigos`, o filtro de admissão é `admitidos_desligados = '01'`, a variável de jornada é `quantidade_horas_contratadas` e é preciso excluir a construção civil do critério de tipo de estabelecimento.
+
+**Cálculo.**
+
+$$\text{Proporção}_t = \text{MM}_{12}\left(\frac{\text{admitidos em vínculos atípicos}_t}{\text{total de admitidos}_t}\right)$$
+
+**Quebra de série.** CAGED e Novo CAGED têm metodologias distintas. A série antiga foi retropolada para o nível da nova, associando o último patamar de uma ao primeiro da outra. O degrau residual coincide com o início da pandemia, o que torna difícil separar quebra de efeito real. Sinalizar na publicação.
+
+\hypertarget{ITD_Sec_1_14}{}
+
+## 1.14. Desigualdade dos rendimentos do trabalho (Gini e Palma)
+
+**Fonte:** PNADC-T. **Frequência:** trimestral. **Polaridade:** negativa. **Séries:** `PNADCT_Gini_rendahabTodosTrabalhos` e `PNADCT_Palma90_40_Massa_TodosTrab`. **Dimensão:** qualidade, equidade.
+
+#### Figura 1.15. Índice de Gini dos rendimentos do trabalho
+
+```{r itd-fig-gini, out.width = img_out_width}
+f_img("PNADCT_Gini_rendahabTodosTrabalhos")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+#### Figura 1.16. Índice de Palma (massa do décimo superior sobre os quatro décimos inferiores)
+
+```{r itd-fig-palma, out.width = img_out_width}
+f_img("PNADCT_Palma90_40_Massa_TodosTrab")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+**Gini.** Calculado sobre o rendimento habitual real de todos os trabalhos, excluindo quem não tem rendimento declarado, com `reldist::gini(VD4019 * Habitual, V1028)`.
+
+**Palma.** Os décimos são construídos com quantis ponderados (`Hmisc::wtd.quantile`) sobre o rendimento real positivo. O indicador é a razão entre massas:
+
+$$\text{Palma} = \frac{\sum_{i \in D_{10}} w_i \cdot y_i}{\sum_{i \in D_1 \ldots D_4} w_i \cdot y_i}$$
+
+com $y_i$ o rendimento real de todos os trabalhos.
+
+**Variantes.** O projeto também calculou a razão entre separatrizes (valor do percentil 90 sobre o do percentil 40) e versões por hora e restritas ao trabalho principal (`PNADCT_Palma90_40_Hora_TrabPrinc`). A versão por massa é a de referência.
+
+**Nota.** O Gini dos rendimentos do trabalho é muito estável no curto prazo. Para uso trimestral, o Palma reage mais.
+
+\hypertarget{ITD_Sec_1_15}{}
+
+## 1.15. Diferenças de rendimento por sexo e por cor
+
+**Fonte:** PNADC-T. **Frequência:** trimestral. **Polaridade:** positiva (razão mais próxima de 1 é melhor). **Séries:** `PNADCT_RendimentoRealMedio_sexo`, `_cor` e `_SexoCor`. **Dimensão:** qualidade, equidade.
+
+#### Figura 1.17. Razão de rendimento, mulheres negras sobre homens brancos
+
+```{r itd-fig-sexocor, out.width = img_out_width}
+f_img("PNADCT_RendimentoRealMedio_SexoCor")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+**Variáveis:** `VD4019` com deflator `Habitual`, `V2007` (sexo), `V2010` (cor ou raça), `V1028`.
+
+**Cálculo.** Em todos os casos, razão entre médias ponderadas de rendimento:
+
+$$\text{Razão}_{\text{sexo}} = \frac{\bar{y}_{\text{mulheres}}}{\bar{y}_{\text{homens}}}, \quad
+\text{Razão}_{\text{cor}} = \frac{\bar{y}_{\text{negros}}}{\bar{y}_{\text{brancos}}}, \quad
+\text{Razão}_{\text{inter}} = \frac{\bar{y}_{\text{mulheres negras}}}{\bar{y}_{\text{homens brancos}}}$$
+
+com negros definidos como `V2010` em (2, 4), isto é, pretos e pardos, e brancos como `V2010 == 1`.
+
+**Recomendação do projeto.** Priorizar a série interseccional, que resume as duas desigualdades em um número.
+
+\hypertarget{ITD_Sec_1_16}{}
+
+## 1.16. Mulheres e negros em postos de direção
+
+**Fonte:** PNADC-T. **Frequência:** trimestral. **Polaridade:** positiva. **Séries:** `PNADCT_PostosDirecao_mulheres`, `_negros`, `_MulheresNegras` e `_restrito_MulheresNegras`. **Dimensão:** qualidade, equidade.
+
+#### Figura 1.18. Mulheres negras em postos de direção
+
+```{r itd-fig-direcao, out.width = img_out_width}
+f_img("PNADCT_PostosDirecao_MulheresNegras")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+**Variáveis:** `VD4011` (grupamento ocupacional; 1 é "Diretores e gerentes"), `VD4002`, `V2007`, `V2010`, `V1028`; na versão restrita, `V4010` (código da ocupação).
+
+**Cálculo.**
+
+$$\text{Proporção} = \frac{\sum_i w_i \cdot [VD4002_i = 1] \cdot [VD4011_i = 1] \cdot [\text{grupo}_i]}{\sum_i w_i \cdot [VD4002_i = 1] \cdot [VD4011_i = 1]}$$
+
+**Versão restrita.** Para separar direção de gerência, filtra-se `V4010` pelos dois primeiros dígitos 11, 12 e 13 (dirigentes e membros do poder público, dirigentes administrativos e comerciais, dirigentes e gerentes de produção). A amostra fica pequena e a série, mais volátil: usar com média móvel.
+
+\hypertarget{ITD_Sec_1_17}{}
+
+## 1.17. Greves propositivas sobre defensivas
+
+**Fonte:** DIEESE, Sistema de Acompanhamento de Greves (SAG). **Frequência:** anual. **Polaridade:** positiva. **Série:** `DIEESE_GrevesPropositivas`. **Dimensão:** qualidade, diálogo social.
+
+#### Figura 1.19. Proporção de greves propositivas
+
+```{r itd-fig-greves, out.width = img_out_width}
+f_img("DIEESE_GrevesPropositivas")
+```
+
+\footnotesize Fonte: DIEESE (SAG). Elaboração própria. \normalsize
+
+**Cálculo.**
+
+$$\text{Proporção}_{ano} = \frac{\text{greves propositivas}_{ano}}{\text{greves propositivas}_{ano} + \text{greves defensivas}_{ano}}$$
+
+**Definições do DIEESE.** Greve é a interrupção temporária do trabalho, feita intencionalmente por um grupo de trabalhadores, para impor reivindicação, opor-se a exigência ou expressar queixa; ficam de fora paralisações patronais e formas de protesto sem suspensão do trabalho. São **propositivas** as greves por novas conquistas ou por avanço sobre normas já estabelecidas, e **defensivas** as que buscam manutenção ou cumprimento de direitos e se opõem ao rebaixamento de condições vigentes.
+
+**Trimestralização.** A série é anual e o painel é trimestral. A convenção adotada é **repetir o valor do ano nos seus quatro trimestres**, o que trata o dado como característica do ano, que é o que ele é: um balanço anual de greves. O custo é um degrau na virada do ano. A alternativa, interpolar linearmente entre anos, foi testada e descartada por duas razões: sugere uma trajetória dentro do ano que não foi medida e faz o último ano da série entrar apenas com o primeiro trimestre, o que atrasava o índice em três trimestres. As duas curvas do IDH-T são praticamente iguais, com correlação de 0,995 e diferença média de 0,008. O tratamento é definido por `TRATAMENTO_ANUAL`, em `R/00_config.R`, e vale para todas as séries anuais do feixe.
+
+**Obtenção.** Os balanços anuais de greves são lidos direto dos PDF publicados pelo DIEESE, por `R/11_dieese_greves_pdf.Rmd`, que localiza as publicações pelo padrão de endereço, baixa e extrai a tabela de caráter das greves. A tabulação especial em planilha (`DIEESE_GrevesPropositivasDefensivas.xlsx`) permanece como fonte dos anos anteriores à cobertura dos PDF e como alternativa se a leitura automática falhar. O SAG depende de cobertura da imprensa, o que pode afetar a comparabilidade ao longo do tempo.
+
+\hypertarget{ITD_Sec_1_18}{}
+
+## 1.18. Acordos coletivos com reajuste acima da inflação
+
+**Fonte:** DIEESE (SACC), sobre instrumentos coletivos do Sistema Mediador (MTE). **Frequência:** anual até 2017, mensal a partir de 2018. **Polaridade:** positiva. **Série:** `DIEESE_ReajustesAcimaINPC`. **Dimensão:** qualidade, diálogo social.
+
+#### Figura 1.20. Acordos com reajuste acima da inflação
+
+```{r itd-fig-acordos, out.width = img_out_width}
+f_img("DIEESE_ReajustesAcimaINPC")
+```
+
+\footnotesize Fonte: DIEESE, com base no Sistema Mediador (MTE). Elaboração própria. \normalsize
+
+**Cálculo.** O indicador é a proporção dos instrumentos coletivos cujo reajuste supera o INPC acumulado nos 12 meses anteriores à data-base, suavizada por média móvel de 12 meses:
+
+$$\text{Indicador}_t = \text{MM}_{12}\left(\frac{\text{instrumentos com reajuste acima do INPC}_t}{\text{total de instrumentos com reajuste}_t}\right)$$
+
+**Regras de tratamento do DIEESE.** Consideram-se apenas os reajustes aplicados aos salários acima do piso; em reajustes escalonados, registra-se o percentual da menor faixa salarial; reajustes parcelados entram pelo percentual total, como se pagos de uma vez na data-base; a inflação de referência é o INPC, salvo quando o instrumento declara outro período de compensação.
+
+**Emenda das frequências.** Até 2017 há um ponto por ano; de 2018 em diante, um por mês. A série anual é interpolada para mensal antes da média móvel: parte dos pontos é construída.
+
+**Leitura automática.** Os meses recentes vêm dos boletins *De Olho nas Negociações*, lidos por `R/12_dieese_reajustes_pdf.Rmd`. Cada boletim traz o gráfico das últimas doze datas-base, do qual se extraem doze observações; meses revisados em boletins posteriores ficam com a leitura mais recente. A ordem de prioridade entre fontes é: boletins, tabulação do Mediador por região, planilha mensal, planilha anual.
+
+\hypertarget{ITD_Sec_1_19}{}
+
+## 1.19. Confiança nos sindicatos
+
+**Fonte:** IPEC, Índice de Confiança Social (ICS). **Frequência:** anual. **Polaridade:** positiva. **Série:** `ICS_ConfiancaSindicatos`. **Dimensão:** qualidade, diálogo social.
+
+#### Figura 1.21. Confiança nos sindicatos
+
+```{r itd-fig-ics, out.width = img_out_width}
+f_img("ICS_ConfiancaSindicatos")
+```
+
+\footnotesize Fonte: IPEC, Índice de Confiança Social. Elaboração própria. \normalsize
+
+**Obtenção.** O ICS é uma pesquisa de opinião anual do IPEC (sucessor do Ibope Inteligência), com população de 16 anos ou mais. Na edição usada: 2.000 entrevistas em 127 municípios, intervalo de confiança de 95% e margem de erro de 2 pontos percentuais. Não há base aberta: o item "sindicatos" é extraído manualmente dos relatórios anuais em PDF e digitado em planilha (`Confianca_Sindicato_ICS.xlsx`). A série anual vira trimestral pela repetição do valor do ano nos quatro trimestres, conforme `TRATAMENTO_ANUAL`.
+
+**Cuidados.** É o único indicador de percepção do feixe, com amostra pequena, margem de erro da mesma ordem da variação anual e dependência de uma publicação privada. Não entra no índice final.
+
+\hypertarget{ITD_Sec_1_20}{}
+
+## 1.20. Acidentes de trabalho
+
+**Fonte:** INSS/Dataprev (AEAT, CAT registradas), com denominador construído na PNADC-T. **Frequência:** mensal. **Polaridade:** negativa. **Série:** `INSS_AcidentesTrabalho_ponderadoSegurada`. **Dimensão:** qualidade, saúde e segurança.
+
+#### Figura 1.22. Acidentes de trabalho por mil segurados
+
+```{r itd-fig-acidentes, out.width = img_out_width}
+f_img("INSS_AcidentesTrabalho_ponderadoSegurada")
+```
+
+\footnotesize Fonte: INSS/Dataprev (AEAT) e IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+**Cálculo.**
+
+$$\text{Indicador}_t = \frac{\text{MM}_{12}(\text{CAT registradas})_t}{\text{MM}_{12}(\text{população segurada})_t} \times 1000$$
+
+A população segurada vem da PNADC-T, interpolada de trimestral para mensal antes da média móvel.
+
+**População segurada (denominador).** São os assalariados formais do setor privado, exceto domésticos (`VD4009 == 1`), mais empregadores e conta-própria que contribuem para a previdência (`VD4009` em (8, 9) com `VD4012 == 1`). É o contingente coberto pelo seguro de acidentes do trabalho, o que torna a razão comparável ao universo das CAT registradas.
+
+**Subnotificação.** A CAT é emitida pela empresa, que tem incentivo a não emitir, e doenças relacionadas ao trabalho dependem de diagnóstico. Trabalhadores informais estão fora do sistema. Aumentos de fiscalização elevam o número de casos registrados sem que a incidência real tenha subido. O indicador mede registro, não ocorrência.
+
+\hypertarget{ITD_Sec_1_21}{}
+
+## 1.21. Afastamento remunerado por doença ou acidente
+
+**Fonte:** PNADC-T. **Frequência:** trimestral. **Polaridade:** negativa. **Série:** `PNADCT_AfastamentoRemunerado`. **Dimensão:** qualidade, saúde e segurança.
+
+#### Figura 1.23. Afastamento remunerado por doença ou acidente
+
+```{r itd-fig-afastamento, out.width = img_out_width}
+f_img("PNADCT_AfastamentoRemunerado")
+```
+
+\footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
+
+**Variáveis:** `V4006` (até 3T2015) ou `V4006A` (a partir de 4T2015), categoria 3, "licença remunerada por motivo de doença ou acidente da própria pessoa"; `VD4002`; `V1028`.
+
+**Cálculo.**
+
+$$\text{Taxa} = \frac{\sum_i w_i \cdot [\text{motivo de afastamento}_i = 3]}{\sum_i w_i \cdot [VD4002_i = 1]}$$
+
+**Variante.** A série `PNADCT_Afastamento` soma a categoria 5 (afastamento do próprio negócio por doença ou acidente, sem remuneração de instituto de previdência), alcançando também conta-própria e empregadores.
+
+**Limites.** A categoria mistura doença e acidente e não identifica se a causa é o trabalho. Por outro lado, o fato de ser licença remunerada aproxima o indicador dos vínculos formais.
+
+\pagebreak
+
+\hypertarget{ITD_Sec_2}{}
+
+# 2. Cálculo do IDH-T
+
+O IDH-T é o índice sintético do projeto, construído por **agregação**: séries de origens distintas são postas na mesma escala e combinadas em um número por trimestre. Esta seção descreve o cálculo da **versão final**, a que consta do artigo do projeto.
+
+A escolha das 9 séries entre as 21 do feixe, bem como os testes com pesos derivados de análise de componentes principais e de consulta a especialistas, **não são refeitos aqui**. Esse percurso está no artigo e em seu anexo metodológico (CARDOSO; WELLE; KREIN, no prelo), que trazem as parametrizações testadas, as cargas fatoriais e a comparação entre as alternativas. Para reproduzir o índice publicado, basta seguir os cinco passos abaixo.
+
+\hypertarget{ITD_Sec_2_1}{}
+
+## 2.1. Variáveis que entram
+
+```{r itd-tabela-variaveis}
+tribble(
+  ~Dimensão,             ~Indicador,                                        ~Série,                               ~Polaridade,
+  "Ocupação suficiente", "Taxa composta de subutilização",                  "PNADCT_TxCompostaSubutilizacao",     "Negativa",
+  "Acesso a direitos",   "Contribuição à previdência",                      "PNADCT_PrevidenciaTodosTrab",        "Positiva",
+  "Acesso a direitos",   "Carteira entre os assalariados",                  "PNADCT_CarteiraTrabAssalariados",    "Positiva",
+  "Acesso a direitos",   "Estabilidade no emprego formal privado",          "PNADCT_AcessoSeguroDesempregoAssal", "Positiva",
+  "Qualidade",           "Ocupados com renda abaixo da linha da POF",       "PNADCT_TxOcupadosRendaAbaixoPOF",    "Negativa",
+  "Qualidade",           "Rendimento real médio",                           "PNADCT_RendimentoRealMedio",         "Positiva",
+  "Qualidade",           "Jornada acima de 44 horas",                       "PNADCT_TxJornadaAcima44h",           "Negativa",
+  "Qualidade",           "Greves propositivas sobre defensivas",            "DIEESE_GrevesPropositivas",          "Positiva",
+  "Qualidade",           "Acordos com reajuste acima da inflação (MM 12m)", "DIEESE_ReajustesAcimaINPC_MM",       "Positiva"
+) |>
+  f_kable("Tabela 1. As nove séries do IDH-T final") |>
+  kableExtra::column_spec(1, width = "2.6cm") |>
+  kableExtra::column_spec(2, width = "5.2cm") |>
+  kableExtra::column_spec(3, width = "5.2cm") |>
+  kableExtra::column_spec(4, width = "1.6cm")
+```
+
+Sete séries vêm da PNADC-T (uma delas com a linha de renda calculada na POF) e duas do DIEESE. A série de acordos entra na versão suavizada por média móvel de 12 meses; as demais entram no valor do trimestre.
+
+\hypertarget{ITD_Sec_2_2}{}
+
+## 2.2. Passo a passo
+
+**Passo 1. Montar o painel trimestral.** Reunir as nove séries em formato longo, com as colunas `data`, `variavel` e `valor`, uma linha por série e trimestre. Séries de frequência diferente da trimestral são convertidas antes: as mensais entram pelo valor do primeiro mês do trimestre (depois da média móvel, quando houver) e as anuais têm o valor do ano repetido nos quatro trimestres, conforme `TRATAMENTO_ANUAL`, descrito na Seção 1. O índice só é calculado nos trimestres em que todas as nove séries existem.
+
+**Passo 2. Alinhar a polaridade.** Séries de polaridade negativa têm o sinal invertido, de modo que, para todas, valores maiores passem a significar situação melhor:
+
+$$x_{v,t} = \begin{cases} \text{valor}_{v,t}, & \text{se a polaridade de } v \text{ é positiva} \\ -\text{valor}_{v,t}, & \text{se a polaridade de } v \text{ é negativa} \end{cases}$$
+
+**Passo 3. Normalizar cada série entre 0 e 1.** Normalização de mínimo e máximo, feita **por série** e sobre todo o período:
+
+$$z_{v,t} = \frac{x_{v,t} - \min_t(x_{v})}{\max_t(x_{v}) - \min_t(x_{v})}$$
+
+Assim, 0 é o pior valor observado da série no período e 1 é o melhor. A normalização torna o índice invariante a mudanças de unidade ou de base de preços, mas **depende do período**: acrescentar trimestres novos pode redefinir mínimo e máximo e alterar valores passados do índice, que é por isso uma série revisável a cada rodada.
+
+**Passo 4. Agregar com pesos iguais.** O índice do trimestre é a média simples das nove séries normalizadas:
+
+$$\text{IDH-T}_t = \frac{1}{9} \sum_{v=1}^{9} z_{v,t}$$
+
+Pesos iguais são uma escolha assumida: é a opção mais simples de auditar e a que menos esconde julgamento normativo atrás de técnica estatística. O artigo apresenta a alternativa com pesos derivados do PCA e mostra que as duas séries resultantes são próximas.
+
+**Passo 5. Publicar com os componentes.** O índice não deve ser divulgado sozinho. A recomendação do projeto é apresentá-lo sempre acompanhado das nove séries que o compõem, porque movimentos em sentidos opostos podem deixar o índice estável enquanto o mercado de trabalho muda.
+
+O código a seguir resume os passos 2 a 4, partindo de um painel `d` com as colunas `data`, `variavel`, `valor` e `polaridade`:
+
+```r
+library(data.table)
+
+d <- as.data.table(d)
+
+# Passo 2: polaridade
+d[, valor_pol := fifelse(polaridade == "negativa", -valor, valor)]
+
+# Passo 3: normalizacao min-max por serie
+d[, z := (valor_pol - min(valor_pol, na.rm = TRUE)) /
+         (max(valor_pol, na.rm = TRUE) - min(valor_pol, na.rm = TRUE)),
+  by = variavel]
+
+# Passo 4: media simples entre as series (pesos iguais)
+idht <- d[, .(indice = mean(z, na.rm = TRUE)), by = data][order(data)]
+```
+
+\pagebreak
+
+\hypertarget{ITD_Sec_2_3}{}
+
+## 2.3. Resultado
+
+O índice calculado pelos passos acima, com os dados da última rodada.
+
+```{r itd-resultado-carrega, include=FALSE}
+arq_idht <- "output/idht.csv"
+tem_idht <- file.exists(arq_idht)
+if (tem_idht) {
+  idht <- data.table::fread(arq_idht, dec = ",")
+  idht[, data := as.IDate(data)]
+  setorder(idht, data)
+}
+```
+
+```{r itd-resultado-texto, echo=FALSE, results='asis', eval=tem_idht}
+cat(sprintf(paste0("A série tem **%d trimestres**, do %dT%s ao %dT%s. ",
+                   "O valor mais recente é **%s**, contra %s no primeiro ",
+                   "trimestre da série.\n"),
+            nrow(idht),
+            data.table::quarter(min(idht$data)), format(min(idht$data), "%Y"),
+            data.table::quarter(max(idht$data)), format(max(idht$data), "%Y"),
+            format(round(idht[.N, idht], 3), decimal.mark = ","),
+            format(round(idht[1, idht], 3), decimal.mark = ",")))
+```
+
+#### Figura 2.1. IDH-T
+
+```{r itd-resultado-grafico, echo=FALSE, eval=tem_idht, fig.width=8, fig.height=4.5}
+ggplot2::ggplot(idht, ggplot2::aes(as.Date(data), idht)) +
+  ggplot2::geom_line(linewidth = 1.1) +
+  ggplot2::scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  ggplot2::scale_y_continuous(limits = c(0, 1)) +
+  ggplot2::labs(x = NULL, y = NULL) +
+  ggplot2::theme_bw(base_size = 11)
+```
+
+\footnotesize Fonte: elaboração própria. Projeto ITD. \normalsize
+
+A tabela abaixo traz os oito trimestres mais recentes.
+
+```{r itd-resultado-tabela, echo=FALSE, eval=tem_idht}
+ult <- tail(idht, 8)[, .(Trimestre = paste0(data.table::quarter(data), "T",
+                                            format(data, "%Y")),
+                         `IDH-T` = format(round(idht, 3), decimal.mark = ","))]
+f_kable(ult, paste0("Tabela 2. IDH-T nos oito trimestres mais recentes"))
+```
+
+O índice só é calculado nos trimestres em que as nove séries existem. O limite
+da série é, portanto, a fonte mais defasada, hoje o balanço anual de greves do
+DIEESE, publicado no ano seguinte ao de referência.
+
+Dois cuidados na leitura. O valor não tem significado absoluto: 0 é o pior e 1 o
+melhor valor observado no período, de modo que o índice informa posição relativa
+dentro da própria série, e não distância a um ideal. E a normalização depende do
+período: ao entrarem trimestres novos, mínimos e máximos podem mudar, o que faz
+do IDH-T uma série revisável a cada rodada.
+
+\pagebreak
+
+
+\pagebreak
+
+\hypertarget{ITD_Anexo}{}
+
+# Anexo. Variáveis das PNADs usadas no feixe
+
+Lista completa das variáveis lidas dos microdados, para quem for reproduzir ou
+estender o cálculo. A coluna Indicador remete à numeração da Seção 1.
+
+## A.1. PNAD Contínua Trimestral
+
+São 24 variáveis, lidas com `select` na leitura de cada trimestre. A lista está
+em `COLS_PNADCT`, em `R/01_pnadc_trimestral.Rmd`.
+
+```{r itd-anexo-pnadct}
+tribble(
+  ~Variável, ~Conteúdo, ~Indicador,
+  "Ano, Trimestre, UF", "identificacao do periodo e da unidade da federacao", "todos",
+  "V1028",   "peso amostral", "todos",
+  "V1028001 a V1028200", "pesos replicados, para erro padrao", "opcional",
+  "V2007",   "sexo", "1.15, 1.16",
+  "V2010",   "cor ou raca", "1.15, 1.16",
+  "V4006",   "motivo do afastamento, ate 3T2015", "1.21",
+  "V4006A",  "motivo do afastamento, a partir de 4T2015", "1.21",
+  "V4010",   "codigo da ocupacao (COD), usado na versao restrita de direcao", "1.16",
+  "V4019",   "CNPJ do negocio, a partir de 4T2015", "1.7",
+  "V40401",  "tempo no trabalho atual, de 1 a 11 meses", "1.4",
+  "V40402",  "tempo no trabalho atual, de 1 a menos de 2 anos", "1.4",
+  "V40403",  "tempo no trabalho atual, 2 anos ou mais", "1.4",
+  "VD4001",  "condicao em relacao a forca de trabalho", "1.1, 1.2, 1.8, 1.12",
+  "VD4002",  "condicao de ocupacao", "1.1, 1.7, 1.8, 1.16, 1.21",
+  "VD4003",  "forca de trabalho potencial", "1.1",
+  "VD4004",  "subocupacao por insuficiencia de horas efetivas, ate 3T2015", "1.1",
+  "VD4004A", "subocupacao por insuficiencia de horas habituais, a partir de 4T2015", "1.1",
+  "VD4005",  "desalento", "contexto",
+  "VD4009",  "posicao na ocupacao, detalhada", "1.3, 1.4, 1.7, 1.20",
+  "VD4011",  "grupamento ocupacional do trabalho principal", "1.16",
+  "VD4012",  "contribuicao a previdencia em qualquer trabalho", "1.2, 1.7, 1.20",
+  "VD4019",  "rendimento habitual de todos os trabalhos", "1.8, 1.9, 1.14, 1.15",
+  "VD4031",  "horas habitualmente trabalhadas em todos os trabalhos", "1.8, 1.12"
+) |>
+  f_kable("Tabela A.1. Variáveis da PNAD Contínua Trimestral") |>
+  kableExtra::column_spec(1, width = "3.2cm") |>
+  kableExtra::column_spec(2, width = "8.3cm") |>
+  kableExtra::column_spec(3, width = "3cm")
+```
+
+## A.2. PNAD Contínua Anual
+
+Quatro variáveis, mais a identificação. Os códigos de rendimento mudaram ao
+longo da série, o que exige três regras por período.
+
+```{r itd-anexo-pnadca}
+tribble(
+  ~Variável, ~Conteúdo, ~Período,
+  "Ano, Trimestre", "identificacao do periodo dentro da amostra anual", "todos",
+  "V1032",  "peso amostral da visita anual", "todos",
+  "V2009",  "idade", "todos",
+  "V50011", "recebeu aposentadoria de instituto de previdencia", "2012 a 2015, trimestres 1 a 3",
+  "V50021", "recebeu pensao de instituto de previdencia", "2012 a 2015, trimestres 1 a 3",
+  "V5004A", "recebeu aposentadoria ou pensao", "4T2015 em diante"
+) |>
+  f_kable("Tabela A.2. Variáveis da PNAD Contínua Anual") |>
+  kableExtra::column_spec(1, width = "2.6cm") |>
+  kableExtra::column_spec(2, width = "7.4cm") |>
+  kableExtra::column_spec(3, width = "4.5cm")
+```
+
+## A.3. Variáveis derivadas
+
+Construídas a partir das anteriores, dentro dos scripts.
+
+```{r itd-anexo-derivadas}
+tribble(
+  ~Derivada, ~Construção, ~Indicador,
+  "subocupado", "VD4004 ate 3T2015, VD4004A depois", "1.1",
+  "afastado_doenca", "V4006 ou V4006A igual a 3", "1.21",
+  "tempo_ocupacao", "meses no trabalho atual, de V40401, V40402 e V40403", "1.4",
+  "renda_real", "VD4019 multiplicado pelo deflator Habitual", "1.8, 1.9, 1.14, 1.15",
+  "renda_hora", "renda_real dividida por VD4031", "1.8",
+  "formalizado", "VD4009 em 1, 3, 5 ou 7; conta-propria ou empregador com VD4012 igual a 1; empregador com V4019 igual a 1 a partir de 4T2015", "1.7",
+  "recebe", "V50011 ou V50021 iguais a 1, ou V5004A igual a 1, conforme o periodo", "1.6"
+) |>
+  f_kable("Tabela A.3. Variáveis derivadas") |>
+  kableExtra::column_spec(1, width = "2.8cm") |>
+  kableExtra::column_spec(2, width = "8.7cm") |>
+  kableExtra::column_spec(3, width = "3cm")
+```
+
+## A.4. Mudanças de questionário a observar
+
+| Quando | O que muda | Onde aparece |
+|---|---|---|
+| 4T2015 | subocupação passa de horas efetivas (`VD4004`) para habituais (`VD4004A`) | 1.1 |
+| 4T2015 | motivo do afastamento passa de `V4006` para `V4006A` | 1.21 |
+| 4T2015 | `V4019`, CNPJ do negócio, passa a existir e entra no critério de formalidade do empregador | 1.7 |
+| 4T2015 | na PNADC Anual, `V50011` e `V50021` dão lugar a `V5004A` | 1.6 |
+
+As três primeiras são tratadas por período dentro de `R/01_pnadc_trimestral.Rmd`
+e a última em `R/02_pnadc_anual.Rmd`. Nenhuma tem correção retroativa possível:
+são quebras do próprio questionário e precisam ser informadas a quem lê a série.
+
+# Referências
+
+CARDOSO, A.; WELLE, A.; KREIN, J. D. Por um Índice de Desenvolvimento Humano no Trabalho. Artigo submetido à revista **Brésil**, no prelo.
+
+DIEESE. **Metodologia da cesta básica de alimentos**. São Paulo: DIEESE, 2016.
+
+IBGE. **Pesquisa Nacional por Amostra de Domicílios Contínua: novos indicadores sobre a força de trabalho**. Rio de Janeiro: IBGE, 2021.
+
+MINISTÉRIO DO TRABALHO E EMPREGO. **Nota técnica RAIS 2022**. Brasília: MTE, 2022.
+
+NARDO, M.; SAISANA, M.; SALTELLI, A.; TARANTOLA, S.; HOFFMANN, A.; GIOVANNINI, E. **Handbook on Constructing Composite Indicators: Methodology and User Guide**. Paris: OECD Publishing, 2008.

@@ -1,0 +1,129 @@
+---
+title: "INSS, acidentes de trabalho"
+subtitle: "Projeto Índice do Trabalho Decente, relatório de execução"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r inss-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
+                      fig.width = 8, fig.height = 4.5)
+if (!exists("DIR_RAIZ")) source("R/00_config.R")
+```
+
+## Fonte
+
+- **Numerador**: CAT registradas, do AEAT, Anuário Estatístico de Acidentes do
+  Trabalho, consultado em <https://www3.dataprev.gov.br/aeat/inicio.htm>, tabela
+  de acidentes por mês (`AEAT/gliq/liq02/liq02.PHP`). A consulta é por formulário
+  e a exportação sai em CSV, com meses por extenso e linhas de total por ano.
+- **Denominador**: população segurada, calculada na PNADC Trimestral por
+  `R/01_pnadc_trimestral.Rmd` (série `PopulacaoSeguradaINSS`): assalariados
+  formais do setor privado, exceto domésticos, mais empregadores e conta-própria
+  que contribuem para a previdência.
+
+Produz a série `AcidentesTrabalho_ponderadoSegurada`, em acidentes por mil
+segurados.
+
+Alternativa automatizável, registrada em `dados/inss/LEIAME.md`: a base aberta de
+CAT em dados.gov.br, mensal de 2018 em diante. Ela não cobre o início da série, e
+por isso a consulta do AEAT segue como fonte oficial do indicador.
+
+## Leitura do arquivo do AEAT
+
+O arquivo exportado é lido como vem, em latin1, com uma linha de cabeçalho a
+pular, ano preenchido só na primeira linha de cada bloco e linhas de total que
+são descartadas.
+
+```{r inss-leitura}
+ARQ_CAT <- file.path(DIR_FONTE("inss"), "manual", "AcidentesTrabalhoINSS1999_2022.csv")
+
+tem_cat <- file.exists(ARQ_CAT)
+if (!tem_cat) {
+  warning("Arquivo do AEAT ausente em ", ARQ_CAT, ". Serie nao gerada. ",
+          "Veja dados/inss/LEIAME.md.", call. = FALSE, immediate. = TRUE)
+}
+
+if (tem_cat) {
+  f_registra_manifesto("inss", ARQ_CAT, "manual",
+                       "consulta AEAT, www3.dataprev.gov.br/aeat, tabela liq02")
+
+  bruto <- fread(ARQ_CAT, encoding = "Latin-1", skip = 1, showProgress = FALSE)
+  names(bruto) <- tolower(gsub("[^A-Za-z0-9]+", "_",
+                               iconv(names(bruto), to = "ASCII//TRANSLIT")))
+  message("colunas: ", paste(names(bruto), collapse = ", "))
+  print(head(bruto, 3))
+}
+```
+
+## Limpeza
+
+```{r inss-limpeza, eval=tem_cat}
+meses <- c("janeiro", "fevereiro", "marco", "abril", "maio", "junho",
+           "julho", "agosto", "setembro", "outubro", "novembro", "dezembro")
+
+d <- copy(bruto)
+d[, ano := as.character(ano)]
+d[ano == "", ano := NA_character_]
+d[, ano := zoo::na.locf(ano, na.rm = FALSE)]          # ano preenchido por bloco
+d <- d[tolower(mes) != "total" & tolower(ano) != "total"]
+d[, mes_n := match(tolower(iconv(mes, to = "ASCII//TRANSLIT")), meses)]
+d <- d[!is.na(mes_n)]
+d[, data := as.IDate(sprintf("%s-%02d-01", ano, mes_n))]
+
+# A coluna de interesse e o total de CAT registradas. A exportacao do AEAT traz
+# tambem a coluna "sem cat", que fica de fora do numerador.
+col_total <- grep("^total$", names(d), value = TRUE)[1]
+if (is.na(col_total)) stop("Coluna de total nao encontrada no arquivo do AEAT.")
+col_semcat <- grep("sem_cat", names(d), value = TRUE)[1]
+
+d[, cat := as.numeric(get(col_total))]
+if (!is.na(col_semcat)) d[, cat := cat - as.numeric(get(col_semcat))]
+
+d <- d[, .(data, cat)][order(data)]
+d[, .(pontos = .N, de = min(data), ate = max(data))]
+```
+
+## Harmonização
+
+Numerador e denominador entram em média móvel de 12 meses. A população segurada
+é trimestral e é interpolada para mensal antes da média.
+
+```{r inss-harmonizacao, eval=tem_cat}
+d[, cat_mm := f_mm12(cat)]
+
+seg <- f_le_serie("PopulacaoSeguradaINSS")
+seg <- f_interpola(seg[, .(data, valor)], por = "month")[order(data)]
+seg[, seg_mm := f_mm12(valor)]
+
+r <- merge(d[, .(data, cat_mm)], seg[, .(data, seg_mm)], by = "data")
+r <- r[!is.na(cat_mm) & !is.na(seg_mm), .(data, valor = (cat_mm / seg_mm) * 1000)]
+r <- r[data >= as.IDate(sprintf("%d-01-01", ANO_INICIO))]
+r[, .(pontos = .N, de = min(data), ate = max(data))]
+```
+
+## Validação
+
+```{r inss-validacao, eval=tem_cat}
+f_valida_serie(r, "AcidentesTrabalho_ponderadoSegurada",
+               faixa = c(0, 50), var_max = 2, freq = "month")
+```
+
+## Saída
+
+```{r inss-saida, eval=tem_cat}
+f_grava_serie(r, "AcidentesTrabalho_ponderadoSegurada")
+f_grafico_serie(r, "AcidentesTrabalho_ponderadoSegurada",
+                titulo = "Acidentes de trabalho por mil segurados",
+                percentual = FALSE)
+```
+
+## Leitura do indicador
+
+O indicador mede registro, não ocorrência. A CAT é emitida pela empresa, que tem
+incentivo a não emitir; doenças relacionadas ao trabalho dependem de diagnóstico;
+trabalhadores informais estão fora do sistema; e aumento de fiscalização eleva o
+número de registros sem que a incidência real tenha subido.

@@ -1,0 +1,204 @@
+---
+title: "PNAD Contínua Anual"
+subtitle: "Projeto Índice do Trabalho Decente, relatório de execução"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r pnadca-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
+                      fig.width = 8, fig.height = 4.5)
+if (!exists("DIR_RAIZ")) source("R/00_config.R")
+```
+
+## Fonte
+
+PNAD Contínua Anual, microdados do IBGE. Produz a série
+`PropoRendaAposentadoriaAcima65anos`: proporção de pessoas de 65 anos ou mais que
+recebem aposentadoria ou pensão de instituto de previdência.
+
+É a única série que depende da versão anual, porque a variável de outras fontes
+de renda não existe na trimestral.
+
+## Obtenção
+
+1. **Anos já processados**: arquivos em `DIR_PNADCA_V1` (`<ano>.gz`) e
+   `DIR_PNADCA_V5` (`<ano>_5v.gz`). Ficam fora do pacote, por tamanho.
+2. **Anos novos**: pacote `PNADcIBGE`, controlado por `BAIXAR_PNADCA` em
+   `R/00_config.R`, desligado por padrão.
+
+Regra de visita, documentada na Seção 1.6 da metodologia:
+
+- **primeira visita** em todos os anos disponíveis;
+- **quinta visita** em 2020 e 2021, anos em que a primeira visita foi a campo por
+  telefone e não teve microdados divulgados.
+
+Detalhes em `dados/pnadc_anual/LEIAME.md`.
+
+## Variáveis por período
+
+Os códigos de rendimento mudaram ao longo da série, o que exige três regras:
+
+| Período | Variável de aposentadoria ou pensão |
+|---|---|
+| 2012 a 2015, trimestres 1 a 3 | `V50011` (aposentadoria) ou `V50021` (pensão), 1 é sim |
+| 2015, trimestre 4 | `V5004A`, 1 é sim |
+| 2016 em diante | `V5004A` |
+
+Em todos os anos, `V1032` é o peso da visita anual e `V2009` a idade.
+
+```{r pnadca-parametros}
+ANOS_V5 <- c(2020, 2021)
+ANO_FIM <- as.integer(format(Sys.Date(), "%Y")) - 1
+
+COLS_BASE  <- c("Ano", "Trimestre", "V1032", "V2009")
+COLS_RENDA <- c("V50011", "V50021", "V5004A")
+```
+
+## Cálculo
+
+$$\text{Taxa}_{ano} = \frac{\sum_i w_i \cdot [\text{idade}_i \geq 65] \cdot [\text{recebe aposentadoria ou pensão}_i]}{\sum_i w_i \cdot [\text{idade}_i \geq 65]}$$
+
+A amostra anual é dividida em trimestres. A taxa é calculada por trimestre e o
+valor do ano é a média dos trimestres.
+
+```{r pnadca-funcao}
+f_arquivo_pnadca <- function(v_ano) {
+  if (v_ano %in% ANOS_V5) {
+    file.path(DIR_PNADCA_V5, paste0(v_ano, "_5v.gz"))
+  } else {
+    file.path(DIR_PNADCA_V1, paste0(v_ano, ".gz"))
+  }
+}
+
+f_ano_pnadca <- function(v_ano) {
+  arq    <- f_arquivo_pnadca(v_ano)
+  visita <- if (v_ano %in% ANOS_V5) 5 else 1
+
+  if (file.exists(arq)) {
+    # A leitura e protegida: arquivos .gz truncados ou corrompidos aparecem de
+    # vez em quando e nao devem derrubar a rodada inteira.
+    d <- tryCatch({
+      disponiveis <- names(data.table::fread(arq, nrows = 1))
+      cols <- intersect(c(COLS_BASE, COLS_RENDA), disponiveis)
+      suppressWarnings(data.table::fread(arq, select = cols, showProgress = FALSE))
+    }, error = function(e) {
+      warning("Falha ao ler ", basename(arq), ": ", conditionMessage(e),
+              ". Ano ignorado; refaca o arquivo de microdados.",
+              call. = FALSE, immediate. = TRUE)
+      NULL
+    })
+    if (is.null(d)) return(NULL)
+  } else if (!BAIXAR_PNADCA) {
+    # Download desligado por padrao: a PNADC Anual e pesada e esta serie nao
+    # entra no IDH-T. Para ligar, mude BAIXAR_PNADCA em R/00_config.R.
+    return(NULL)
+  } else {
+    message("  ", v_ano, " sem microdado local, buscando pelo PNADcIBGE ",
+            "(visita ", visita, ")")
+    d <- tryCatch({
+      x <- PNADcIBGE::get_pnadc(year = v_ano, interview = visita,
+                                vars = c("V1032", "V2009", COLS_RENDA),
+                                design = FALSE, labels = FALSE,
+                                savedir = tempdir())
+      as.data.table(x)
+    }, error = function(e) {
+      warning("Falha ao obter a PNADC Anual de ", v_ano, ": ",
+              conditionMessage(e), call. = FALSE, immediate. = TRUE)
+      NULL
+    })
+    if (is.null(d)) return(NULL)
+  }
+
+  # Marca de recebimento, pela regra do periodo. 2015 e o ano de transicao: os
+  # tres primeiros trimestres usam as variaveis antigas e o quarto, a nova.
+  tem_antigas <- all(c("V50011", "V50021") %in% names(d))
+  tem_nova    <- "V5004A" %in% names(d)
+  d[, recebe := NA_integer_]
+
+  if (v_ano <= 2014 && tem_antigas) {
+    d[, recebe := as.integer(V50011 %in% 1 | V50021 %in% 1)]
+  } else if (v_ano == 2015 && tem_antigas) {
+    d[Trimestre < 4, recebe := as.integer(V50011 %in% 1 | V50021 %in% 1)]
+    if (tem_nova) d[Trimestre == 4, recebe := as.integer(V5004A %in% 1)]
+  } else if (tem_nova) {
+    d[, recebe := as.integer(V5004A %in% 1)]
+  }
+
+  if (all(is.na(d$recebe))) {
+    warning("Ano ", v_ano, " sem variavel de aposentadoria reconhecida. ",
+            "Confira o dicionario do ano.", call. = FALSE, immediate. = TRUE)
+    return(NULL)
+  }
+
+  d[, w := as.numeric(V1032)]
+  d[, idoso := as.integer(as.numeric(V2009) >= 65)]
+
+  if ("Trimestre" %in% names(d)) {
+    k <- d[, .(taxa = sum(w[idoso %in% 1 & recebe %in% 1], na.rm = TRUE) /
+                      sum(w[idoso %in% 1], na.rm = TRUE)), by = Trimestre]
+    valor <- mean(k$taxa, na.rm = TRUE)
+  } else {
+    valor <- d[idoso %in% 1 & recebe %in% 1, sum(w, na.rm = TRUE)] /
+             d[idoso %in% 1, sum(w, na.rm = TRUE)]
+  }
+
+  data.table(data = as.IDate(sprintf("%d-01-01", v_ano)), valor = valor,
+             visita = visita)
+}
+```
+
+## Execução
+
+```{r pnadca-execucao}
+anos <- ANO_INICIO:ANO_FIM
+d <- rbindlist(lapply(anos, f_ano_pnadca))
+
+tem_pnadca <- nrow(d) > 0
+
+if (!tem_pnadca) {
+  warning("Nenhum ano da PNADC Anual foi lido. Serie nao gerada. ",
+          "Microdados ausentes em DIR_PNADCA_V1 e DIR_PNADCA_V5, e ",
+          "BAIXAR_PNADCA = ", BAIXAR_PNADCA, ". Veja dados/pnadc_anual/LEIAME.md.",
+          call. = FALSE, immediate. = TRUE)
+} else {
+  for (a in d$data) {
+    ano_i <- as.integer(format(as.IDate(a), "%Y"))
+    f_registra_manifesto(
+      fonte   = "pnadc_anual",
+      arquivo = f_arquivo_pnadca(ano_i),
+      tipo    = "bruto",
+      origem  = "microdados da PNADC Anual, FTP do IBGE")
+  }
+  print(d[, .(ano = format(data, "%Y"), visita, valor = round(valor, 4))])
+}
+```
+
+## Harmonização
+
+A série é anual e o painel do índice é trimestral. Os trimestres entre
+observações são preenchidos por interpolação linear, o que significa que três de
+cada quatro pontos são construídos.
+
+```{r pnadca-harmonizacao, eval=tem_pnadca}
+d <- f_anual_para_trimestre(d[, .(data, valor)])
+d[, .(pontos = .N, de = min(data), ate = max(data))]
+```
+
+## Validação
+
+```{r pnadca-validacao, eval=tem_pnadca}
+f_valida_serie(d, "PropoRendaAposentadoriaAcima65anos",
+               faixa = c(0.5, 1), var_max = 0.05, freq = "quarter")
+```
+
+## Saída
+
+```{r pnadca-saida, eval=tem_pnadca}
+f_grava_serie(d, "PropoRendaAposentadoriaAcima65anos")
+f_grafico_serie(d, "PropoRendaAposentadoriaAcima65anos",
+                titulo = "Pessoas de 65 anos ou mais com aposentadoria ou pensao")
+```

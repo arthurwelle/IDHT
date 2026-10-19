@@ -1,0 +1,87 @@
+---
+title: "IPEC, confiança nos sindicatos"
+subtitle: "Projeto Índice do Trabalho Decente, relatório de execução"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r ipec-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
+                      fig.width = 8, fig.height = 4.5)
+if (!exists("DIR_RAIZ")) source("R/00_config.R")
+```
+
+## Fonte
+
+Índice de Confiança Social (ICS), do IPEC, sucessor do Ibope Inteligência.
+Pesquisa de opinião anual, com população de 16 anos ou mais. Na edição usada:
+2.000 entrevistas em 127 municípios, intervalo de confiança de 95% e margem de
+erro de 2 pontos percentuais.
+
+O projeto usa apenas o item sindicatos, que gera a série `ConfiancaSindicatos`.
+
+Não há base aberta. O número é extraído do relatório anual em PDF e digitado na
+planilha `dados/ipec/manual/Confianca_Sindicato_ICS.xlsx`, com uma linha por ano.
+O procedimento de atualização está em `dados/ipec/LEIAME.md`.
+
+## Leitura
+
+```{r ipec-leitura}
+ARQ_ICS <- file.path(DIR_FONTE("ipec"), "manual", "Confianca_Sindicato_ICS.xlsx")
+
+tem_ics <- file.exists(ARQ_ICS)
+if (!tem_ics) {
+  warning("Planilha do ICS ausente em ", ARQ_ICS, ". Serie nao gerada. ",
+          "Veja dados/ipec/LEIAME.md.", call. = FALSE, immediate. = TRUE)
+}
+
+if (tem_ics) {
+  f_registra_manifesto("ipec", ARQ_ICS, "manual",
+                       "item sindicatos do relatorio anual do ICS, IPEC, digitado a mao")
+
+  ics <- as.data.table(readxl::read_excel(ARQ_ICS))
+  names(ics) <- tolower(gsub("[^A-Za-z0-9]+", "_", names(ics)))
+  col_valor <- setdiff(names(ics), "ano")[1]
+  print(head(ics, 3))
+}
+```
+
+## Limpeza e harmonização
+
+A planilha pode vir em escala de 0 a 100 ou em proporção; o script normaliza para
+proporção. A pesquisa é anual e o painel é trimestral, então os trimestres entre
+observações são interpolados linearmente.
+
+```{r ipec-harmonizacao, eval=tem_ics}
+ics <- ics[!is.na(ano), .(data  = as.IDate(sprintf("%d-01-01", as.integer(ano))),
+                          valor = as.numeric(get(col_valor)))][order(data)]
+if (ics[, max(valor, na.rm = TRUE)] > 1.5) ics[, valor := valor / 100]
+
+ics <- f_anual_para_trimestre(ics)
+ics <- ics[data >= as.IDate(sprintf("%d-01-01", ANO_INICIO))]
+ics[, .(pontos = .N, de = min(data), ate = max(data))]
+```
+
+## Validação
+
+```{r ipec-validacao, eval=tem_ics}
+f_valida_serie(ics, "ConfiancaSindicatos",
+               faixa = c(0, 1), var_max = 0.1, freq = "quarter")
+```
+
+## Saída
+
+```{r ipec-saida, eval=tem_ics}
+f_grava_serie(ics, "ConfiancaSindicatos")
+f_grafico_serie(ics, "ConfiancaSindicatos",
+                titulo = "Confianca nos sindicatos, ICS")
+```
+
+## Leitura do indicador
+
+É o único indicador de percepção do feixe, com amostra pequena, margem de erro da
+mesma ordem da variação anual e dependência de uma publicação privada. Não entra
+no IDH-T.

@@ -1,0 +1,152 @@
+---
+title: "Painel de indicadores e cálculo do IDH-T"
+subtitle: "Projeto Índice do Trabalho Decente, relatório de execução"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r idht-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
+                      fig.width = 9, fig.height = 5)
+if (!exists("DIR_RAIZ")) source("R/00_config.R")
+```
+
+## O que este script faz
+
+Reúne as séries gravadas pelos scripts de fonte, monta o painel e calcula o
+índice sintético. Os passos são os da Seção 2 da documentação metodológica:
+
+1. montar o painel trimestral com as nove séries do índice;
+2. alinhar a polaridade, invertendo o sinal das séries negativas;
+3. normalizar cada série entre 0 e 1, por mínimo e máximo do período;
+4. agregar com pesos iguais, média simples;
+5. publicar o índice sempre acompanhado dos componentes.
+
+A escolha das nove séries está documentada no artigo do projeto. Aqui o índice é
+apenas recalculado.
+
+## Painel
+
+```{r idht-painel}
+arquivos <- list.files(DIR_SERIES, pattern = "\\.csv$", full.names = TRUE)
+if (length(arquivos) == 0) stop("Nenhuma serie em ", DIR_SERIES)
+
+painel <- rbindlist(lapply(arquivos, function(a) {
+  d <- fread(a, dec = ",")
+  d[, data := as.IDate(data)][]
+}), fill = TRUE)
+
+painel <- merge(painel, DIC_SERIES, by = "variavel", all.x = TRUE)
+setorder(painel, variavel, data)
+fwrite(painel, file.path(DIR_OUT, "painel_indicadores.csv"),
+       sep = ";", dec = ",", bom = TRUE)
+
+painel[, .(pontos = .N, de = min(data), ate = max(data)), by = variavel][order(variavel)]
+```
+
+## Séries do índice
+
+Séries mensais entram pelo valor do primeiro mês de cada trimestre. Só são
+usados os trimestres em que todas as nove séries existem.
+
+```{r idht-selecao}
+vars_idht <- DIC_SERIES[no_idht == TRUE, variavel]
+faltando  <- setdiff(vars_idht, unique(painel$variavel))
+if (length(faltando)) {
+  stop("Series do indice ausentes: ", paste(faltando, collapse = ", "),
+       "\nRode os scripts que as produzem antes deste.")
+}
+
+trimestres <- as.IDate(seq(min(painel$data), max(painel$data), by = "quarter"))
+d <- painel[variavel %in% vars_idht & data %in% trimestres,
+            .(data, variavel, valor, polaridade)]
+
+completos <- d[, .N, by = data][N == length(vars_idht), data]
+incompletos <- setdiff(as.character(unique(d$data)), as.character(completos))
+if (length(incompletos)) {
+  message("trimestres descartados por serie faltante: ", length(incompletos),
+          " (ultimo: ", max(incompletos), ")")
+}
+d <- d[data %in% completos]
+message("trimestres completos: ", length(completos),
+        " (", format(min(completos)), " a ", format(max(completos)), ")")
+```
+
+## Polaridade, normalização e agregação
+
+A normalização depende do período. Ao acrescentar trimestres novos, mínimos e
+máximos podem mudar e alterar valores passados do índice. A decisão sobre fixar
+ou não a janela está na Seção 2.3 da documentação.
+
+```{r idht-calculo}
+# Passo 2
+d[, valor_pol := fifelse(polaridade == "negativa", -valor, valor)]
+
+# Conferencia da polaridade: todas as series precisam estar classificadas.
+pol_invalidas <- d[!polaridade %in% c("negativa", "positiva"), unique(variavel)]
+if (length(pol_invalidas)) {
+  stop("Polaridade nao reconhecida nas series: ",
+       paste(pol_invalidas, collapse = ", "),
+       ". Corrija DIC_SERIES em R/00_config.R.")
+}
+
+# Passo 3
+d[, z := (valor_pol - min(valor_pol, na.rm = TRUE)) /
+         (max(valor_pol, na.rm = TRUE) - min(valor_pol, na.rm = TRUE)),
+  by = variavel]
+
+# Passo 4
+idht <- d[, .(idht = mean(z, na.rm = TRUE), n_series = .N), by = data][order(data)]
+stopifnot(all(idht$n_series == length(vars_idht)))
+
+fwrite(idht[, .(data, idht)], file.path(DIR_OUT, "idht.csv"),
+       sep = ";", dec = ",", bom = TRUE)
+fwrite(dcast(d, data ~ variavel, value.var = "z"),
+       file.path(DIR_OUT, "idht_componentes.csv"), sep = ";", dec = ",", bom = TRUE)
+
+idht[c(1, .N)]
+```
+
+## Validação
+
+```{r idht-validacao}
+f_valida_serie(idht[, .(data, valor = idht)], "IDHT",
+               faixa = c(0, 1), var_max = 0.2, freq = "quarter")
+```
+
+## Índice
+
+```{r idht-grafico-indice}
+g <- ggplot(idht, aes(as.Date(data), idht)) +
+  geom_line(linewidth = 1.2) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(title = "IDH-T, Indice de Desenvolvimento Humano no Trabalho",
+       x = NULL, y = NULL,
+       caption = "Fonte: elaboracao propria. Projeto ITD.") +
+  tema_itd
+ggsave(file.path(DIR_IMG, "IDHT.png"), g, width = 8, height = 5, dpi = 150)
+g
+```
+
+## Componentes
+
+O índice não deve ser divulgado sozinho. Este painel é a peça que acompanha a
+publicação.
+
+```{r idht-grafico-componentes, fig.height=7}
+g2 <- ggplot(merge(d, DIC_SERIES[, .(variavel, rotulo)], by = "variavel"),
+             aes(as.Date(data), z)) +
+  geom_line(linewidth = 0.8) +
+  facet_wrap(~ rotulo, ncol = 3, labeller = label_wrap_gen(28)) +
+  scale_x_date(date_breaks = "4 years", date_labels = "%Y") +
+  labs(title = "Componentes do IDH-T, series normalizadas",
+       x = NULL, y = NULL,
+       caption = "Fonte: elaboracao propria. Projeto ITD.") +
+  tema_itd + theme(strip.text = element_text(size = 8))
+ggsave(file.path(DIR_IMG, "IDHT_componentes.png"), g2, width = 10, height = 7, dpi = 150)
+g2
+```

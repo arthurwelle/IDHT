@@ -1,0 +1,146 @@
+---
+title: "Projeto Índice do Trabalho Decente, execução completa"
+subtitle: "Feixe de indicadores e IDH-T"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = TRUE, warning = TRUE)
+
+```
+
+```{r config, message=TRUE, echo=FALSE}
+
+source("R/00_config.R")
+t_inicio <- Sys.time()
+```
+
+Este documento executa todos os scripts de fonte e o cálculo do índice, na ordem
+correta, e serve como relatório da rodada. Cada seção abaixo é o script da fonte
+correspondente, executado aqui como documento filho.
+
+Ordem de execução e dependências:
+
+1. `03_pof` define a linha de renda usada pela PNADC Trimestral.
+2. `01_pnadc_trimestral` produz as séries da PNADC e a população segurada.
+3. `09_inss` depende da população segurada.
+4. `20_idht` depende de todas as séries do índice.
+
+Para rodar fora deste documento, use `rmarkdown::render("run_all.Rmd")` a
+partir da raiz do pacote.
+
+# POF, linha de renda
+
+```{r child-pof, child="R/03_pof.Rmd"}
+```
+
+# PNAD Contínua Trimestral
+
+```{r child-pnadct, child="R/01_pnadc_trimestral.Rmd"}
+```
+
+# PNAD Contínua Anual
+
+```{r child-pnadca, child="R/02_pnadc_anual.Rmd"}
+```
+
+# IPEADATA
+
+```{r child-ipea, child="R/04_ipeadata.Rmd"}
+```
+
+# SIDRA e Contas Nacionais
+
+```{r child-sidra, child="R/05_sidra_cnt.Rmd"}
+```
+
+# DIEESE, balanços de greves em PDF
+
+```{r child-greves-pdf, child="R/11_dieese_greves_pdf.Rmd"}
+```
+
+# DIEESE, boletins de negociação em PDF
+
+```{r child-reajustes-pdf, child="R/12_dieese_reajustes_pdf.Rmd"}
+```
+
+# DIEESE
+
+```{r child-dieese, child="R/06_dieese.Rmd"}
+```
+
+# CAGED
+
+```{r child-caged, child="R/07_mte_caged.Rmd"}
+```
+
+# TST
+
+```{r child-tst, child="R/08_tst.Rmd"}
+```
+
+# INSS
+
+```{r child-inss, child="R/09_inss.Rmd"}
+```
+
+# IPEC
+
+```{r child-ipec, child="R/10_ipec.Rmd"}
+```
+
+# IDH-T
+
+```{r child-idht, child="R/20_idht.Rmd"}
+```
+
+# Resumo da rodada
+
+```{r resumo, echo=FALSE}
+geradas   <- sub("\\.csv$", "", list.files(DIR_SERIES, pattern = "\\.csv$"))
+esperadas <- DIC_SERIES$variavel
+no_indice <- DIC_SERIES[no_idht == TRUE, variavel]
+
+resumo <- DIC_SERIES[, .(variavel, fonte, no_idht)]
+resumo[, gerada := variavel %in% geradas]
+resumo[, ultimo := sapply(variavel, function(v) {
+  arq <- file.path(DIR_SERIES, paste0(v, ".csv"))
+  if (!file.exists(arq)) return(NA_character_)
+  format(max(fread(arq, dec = ",")[, as.IDate(data)]))
+})]
+knitr::kable(resumo[order(-no_idht, fonte, variavel)],
+             caption = "Series do feixe, fonte e ultimo ponto")
+```
+
+```{r resumo-mensagens, echo=FALSE}
+message("series geradas: ", length(geradas), " de ", length(esperadas))
+if (length(setdiff(esperadas, geradas))) {
+  message("faltando: ", paste(setdiff(esperadas, geradas), collapse = ", "))
+}
+if (length(setdiff(no_indice, geradas))) {
+  warning("FALTAM SERIES DO INDICE: ",
+          paste(setdiff(no_indice, geradas), collapse = ", "),
+          call. = FALSE, immediate. = TRUE)
+}
+message("tempo total: ", round(difftime(Sys.time(), t_inicio, units = "mins"), 1),
+        " min")
+```
+
+# Manifesto de dados
+
+Arquivos usados nesta rodada, com data de modificação e soma de verificação.
+
+```{r manifesto, echo=FALSE}
+arq_man <- file.path(DIR_DADOS, "MANIFESTO.csv")
+if (file.exists(arq_man)) {
+  knitr::kable(fread(arq_man)[, .(fonte, arquivo, tipo, modificado, origem)],
+               caption = "Manifesto de dados")
+} else {
+  message("Manifesto ainda nao gerado.")
+}
+```

@@ -1,0 +1,208 @@
+---
+title: "DIEESE, balanços de greves em PDF"
+subtitle: "Projeto Índice do Trabalho Decente, relatório de execução"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r greves-pdf-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE)
+if (!exists("DIR_RAIZ")) source("R/00_config.R")
+suppressPackageStartupMessages(library(pdftools))
+```
+
+## O que este script faz
+
+Busca no site do DIEESE os PDF do *Balanço das Greves*, extrai a tabela de
+caráter das greves e grava a contagem de propositivas e defensivas por ano.
+
+A saída alimenta `R/06_dieese.Rmd`, que prefere este arquivo à planilha digitada
+à mão. Com isso a série de greves deixa de depender de tabulação especial para
+os anos já publicados.
+
+- Saída: `dados/dieese/auto/greves_balancos.csv`
+- Catálogo dos PDF encontrados: `dados/dieese/auto/catalogo_greves.csv`
+
+## Como os PDF são localizados
+
+O DIEESE não publica índice navegável das publicações. O endereço segue o padrão
+
+```
+https://www.dieese.org.br/estudosepesquisas/<ano>/estPesq<N>greves.pdf
+```
+
+em que `<N>` é o número da publicação na série Estudos e Pesquisas, que avança
+sem relação fixa com o ano. O script varre a faixa de números configurada em
+cada ano, guarda no catálogo o que encontrar e, nas rodadas seguintes, só testa
+números novos.
+
+```{r greves-pdf-parametros}
+DIR_AUTO <- file.path(DIR_FONTE("dieese"), "auto")
+dir.create(DIR_AUTO, showWarnings = FALSE, recursive = TRUE)
+
+ARQ_CATALOGO <- file.path(DIR_AUTO, "catalogo_greves.csv")
+ARQ_SAIDA    <- file.path(DIR_AUTO, "greves_balancos.csv")
+
+URL_BASE <- "https://www.dieese.org.br/estudosepesquisas/"
+
+# Anos de publicacao e faixa de numeros a testar. O balanco de um ano sai no
+# ano seguinte: o de 2025 e a publicacao 113, de 2026.
+ANOS_PUBLICACAO <- 2023:as.integer(format(Sys.Date(), "%Y"))
+NUMEROS         <- 95:160
+
+# TRUE refaz a varredura inteira, ignorando o catalogo.
+REVARRER_GREVES <- FALSE
+```
+
+## Varredura
+
+```{r greves-pdf-varredura}
+catalogo <- if (file.exists(ARQ_CATALOGO) && !REVARRER_GREVES) {
+  fread(ARQ_CATALOGO, colClasses = "character")
+} else {
+  data.table(ano_publicacao = character(), numero = character(),
+             url = character(), existe = character())
+}
+
+#' Testa se um PDF existe, sem baixar o corpo.
+f_existe_pdf <- function(url) {
+  r <- tryCatch(httr::HEAD(url, httr::timeout(10)), error = function(e) NULL)
+  !is.null(r) && httr::status_code(r) == 200
+}
+
+testados <- paste(catalogo$ano_publicacao, catalogo$numero)
+novos <- CJ(ano = as.character(ANOS_PUBLICACAO), n = as.character(NUMEROS))
+novos <- novos[!paste(ano, n) %in% testados]
+
+message("combinacoes ja testadas: ", nrow(catalogo),
+        " | a testar nesta rodada: ", nrow(novos))
+
+if (nrow(novos)) {
+  achados <- novos[, {
+    url <- paste0(URL_BASE, ano, "/estPesq", n, "greves.pdf")
+    .(url = url, existe = as.character(f_existe_pdf(url)))
+  }, by = .(ano, n)]
+  setnames(achados, c("ano", "n"), c("ano_publicacao", "numero"))
+  catalogo <- rbind(catalogo, achados, fill = TRUE)
+  fwrite(catalogo, ARQ_CATALOGO, sep = ";", bom = TRUE)
+}
+
+encontrados <- catalogo[existe == "TRUE"]
+message("PDF encontrados: ", nrow(encontrados))
+print(encontrados[, .(ano_publicacao, numero)])
+```
+
+## Extração da tabela de caráter
+
+A tabela traz uma linha por caráter, com número e percentual. As categorias se
+sobrepõem, porque uma mesma greve pode ter mais de uma motivação, e por isso os
+percentuais somam mais de 100. O indicador usa apenas propositivas e defensivas.
+
+```{r greves-pdf-extracao}
+#' Extrai ano de referencia e contagens de um balanco de greves.
+f_extrai_greves <- function(url) {
+  destino <- file.path(tempdir(), basename(url))
+  ok <- tryCatch({
+    utils::download.file(url, destino, mode = "wb", quiet = TRUE)
+    TRUE
+  }, error = function(e) FALSE)
+  if (!ok) {
+    warning("Falha ao baixar ", url, call. = FALSE, immediate. = TRUE)
+    return(NULL)
+  }
+
+  txt <- tryCatch(pdftools::pdf_text(destino), error = function(e) NULL)
+  if (is.null(txt)) return(NULL)
+
+  # O titulo "Carater das greves" aparece tambem no texto corrido. A tabela e
+  # identificada por duas marcas juntas: o titulo com o ano de referencia, como
+  # em "Carater das greves - Brasil, 2025", e uma linha de contagem logo abaixo.
+  linhas <- unlist(strsplit(txt, "\n"))
+  candidatos <- grep("Car[aá]ter das greves.*Brasil.*[0-9]{4}", linhas)
+  i <- NA_integer_
+  for (k in candidatos) {
+    bloco_k <- linhas[k:min(k + 15, length(linhas))]
+    if (any(grepl("^\\s*Propositivas\\s+[0-9]", bloco_k))) {
+      i <- k
+      break
+    }
+  }
+  if (is.na(i)) {
+    warning("Tabela de carater nao encontrada em ", basename(url),
+            call. = FALSE, immediate. = TRUE)
+    return(NULL)
+  }
+
+  ano_ref <- as.integer(stringr::str_extract(linhas[i], "\\d{4}"))
+
+  # Total de greves, que vem no cabecalho da tabela como "Greves (1.006)".
+  bloco <- linhas[i:min(i + 20, length(linhas))]
+  total <- stringr::str_match(paste(bloco, collapse = " "),
+                              "Greves\\s*\\(([\\d\\.]+)\\)")[, 2]
+  total <- as.numeric(gsub("\\.", "", total))
+
+  f_linha <- function(rotulo) {
+    l <- grep(paste0("^\\s*", rotulo), bloco, value = TRUE)[1]
+    if (is.na(l)) return(NA_real_)
+    # Dois numeros na linha: contagem e percentual.
+    n <- stringr::str_match(l, "([\\d\\.]+)\\s+([\\d,]+)\\s*$")[, 2]
+    as.numeric(gsub("\\.", "", n))
+  }
+
+  r <- data.table(ano = ano_ref,
+                  propositivas = f_linha("Propositivas"),
+                  defensivas   = f_linha("Defensivas"),
+                  total_greves = total,
+                  fonte = url)
+
+  if (is.na(r$ano) || is.na(r$propositivas) || is.na(r$defensivas)) {
+    warning("Leitura incompleta em ", basename(url),
+            call. = FALSE, immediate. = TRUE)
+    return(NULL)
+  }
+  message("  ", basename(url), ": ", r$ano, ", propositivas ", r$propositivas,
+          ", defensivas ", r$defensivas)
+  r
+}
+
+dados <- rbindlist(lapply(encontrados$url, f_extrai_greves))
+```
+
+## Conferência e saída
+
+O mesmo ano aparece em mais de uma publicação: além do balanço anual, o DIEESE
+publica balanços parciais, de meio de ano. Fica a leitura com o maior total de
+greves, que é a do balanço completo.
+
+```{r greves-pdf-saida}
+if (nrow(dados) == 0) {
+  warning("Nenhum balanco de greves foi lido. Arquivo de saida nao atualizado.",
+          call. = FALSE, immediate. = TRUE)
+} else {
+  setorder(dados, ano, total_greves)
+  parciais <- dados[, .N, by = ano][N > 1]
+  if (nrow(parciais)) {
+    message("anos com mais de uma publicacao, ficando a de maior total: ",
+            paste(parciais$ano, collapse = ", "))
+  }
+  dados <- dados[, .SD[.N], by = ano]
+  dados[, prop_propositivas := propositivas / (propositivas + defensivas)]
+
+  # Conferencia: as parcelas nao podem superar o total declarado em mais de
+  # tres vezes, o que indicaria leitura de coluna errada.
+  suspeitas <- dados[propositivas > 3 * total_greves | defensivas > 3 * total_greves]
+  if (nrow(suspeitas)) {
+    warning("Valores suspeitos nos anos: ", paste(suspeitas$ano, collapse = ", "),
+            ". Confira o PDF.", call. = FALSE, immediate. = TRUE)
+  }
+
+  fwrite(dados, ARQ_SAIDA, sep = ";", dec = ",", bom = TRUE)
+  f_registra_manifesto("dieese", ARQ_SAIDA, "bruto",
+                       "balancos de greves do DIEESE, extraidos dos PDF")
+  print(dados[, .(ano, propositivas, defensivas, total_greves,
+                  prop = round(prop_propositivas, 4))])
+}
+```

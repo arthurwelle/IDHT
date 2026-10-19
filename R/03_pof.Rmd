@@ -1,0 +1,155 @@
+---
+title: "POF 2017-2018, linha de renda necessária"
+subtitle: "Projeto Índice do Trabalho Decente, relatório de execução"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r pof-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
+                      fig.width = 8, fig.height = 4.5)
+if (!exists("DIR_RAIZ")) source("R/00_config.R")
+```
+
+## Fonte
+
+POF 2017-2018, do IBGE. Este script não produz série: produz um parâmetro, a
+linha de renda usada pelo indicador `TxOcupadosRendaAbaixoPOF`, calculado na
+PNADC Trimestral.
+
+## Construção da linha
+
+1. Na POF, cada domicílio declara a renda que considera necessária para viver.
+2. Por centésimo de renda domiciliar per capita, comparam-se a renda necessária
+   declarada e a renda efetiva.
+3. A linha é o ponto em que as duas curvas se cruzam, isto é, o nível a partir do
+   qual a renda efetiva passa a superar a necessária.
+4. O valor é atualizado pelo IPCA para a base de preços do deflator da PNADC em
+   uso e convertido em renda por hora, dividido pela jornada de referência.
+
+## Dado congelado
+
+O cruzamento foi apurado uma vez sobre os microdados da POF e está tabulado em
+`dados/pof/congelado/POF_RendaNecessaria_RendaEfetiva_Vintesimos.csv`, em formato
+longo, com as colunas `Centesimos`, `variable` (Effective ou Necessary) e
+`value`.
+
+A POF é decenal: a tabulação só muda quando sai uma POF nova. Por isso o arquivo
+é congelado, e o script apenas recalcula o cruzamento para conferência.
+Detalhes em `dados/pof/LEIAME.md`.
+
+```{r pof-leitura}
+ARQ_POF <- file.path(DIR_FONTE("pof"), "congelado",
+                     "POF_RendaNecessaria_RendaEfetiva_Vintesimos.csv")
+
+V_LINHA_POF_PRECOS_POF <- 885   # valor do cruzamento, a precos da POF 2017-2018
+
+f_registra_manifesto(
+  fonte   = "pof",
+  arquivo = ARQ_POF,
+  tipo    = "congelado",
+  origem  = "tabulacao propria sobre os microdados da POF 2017-2018 (IBGE)")
+
+if (file.exists(ARQ_POF)) {
+  d <- fread(ARQ_POF)
+  names(d) <- tolower(names(d))
+  # O arquivo traz, alem das duas curvas, colunas auxiliares de diferenca.
+  d <- d[tolower(variable) %in% c("effective", "necessary") & !is.na(centesimos)]
+  w <- dcast(d, centesimos ~ tolower(variable), value.var = "value")
+  setorder(w, centesimos)
+  i <- which(w$effective >= w$necessary)[1]
+  if (is.na(i)) {
+    warning("Cruzamento nao encontrado na tabulacao da POF.",
+            call. = FALSE, immediate. = TRUE)
+  } else {
+    message("cruzamento no centesimo ", w$centesimos[i],
+            ", renda efetiva de R$ ", round(w$effective[i], 2),
+            " a precos da POF")
+  }
+  head(w, 3)
+} else {
+  warning("Tabulacao da POF ausente em ", ARQ_POF,
+          ". O valor parametrizado em R/00_config.R segue valendo.",
+          call. = FALSE, immediate. = TRUE)
+}
+```
+
+## Atualização de preços
+
+A linha precisa estar na mesma base de preços do deflator da PNADC. O fator vem
+do IPCA, série 433 do SGS do Banco Central, consultado pela API aberta. Sem
+internet, o script mantém o valor parametrizado em `R/00_config.R`.
+
+```{r pof-ipca}
+# O deflator em uso define a base de precos. Baixado aqui, do FTP do IBGE, para
+# que a linha e a serie de rendimentos fiquem sempre na mesma base.
+ARQ_DEFLATOR_USO <- f_baixa_deflator()
+DATA_BASE_LINHA  <- f_base_precos_deflator(ARQ_DEFLATOR_USO)
+DATA_POF         <- as.Date("2018-01-01")   # meio do campo da POF 2017-2018
+
+message("deflator em uso: ", basename(ARQ_DEFLATOR_USO),
+        " (base de precos: ", format(DATA_BASE_LINHA, "%m/%Y"), ")")
+
+f_registra_manifesto("pnadc_trimestral", ARQ_DEFLATOR_USO, "bruto", URL_DEFLATOR)
+
+f_ipca_sgs <- function(inicio, fim) {
+  url <- paste0("https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados",
+                "?formato=csv&dataInicial=", format(inicio, "%d/%m/%Y"),
+                "&dataFinal=", format(fim, "%d/%m/%Y"))
+  d <- tryCatch(fread(url, dec = ","), error = function(e) NULL)
+  if (is.null(d) || nrow(d) == 0) return(NULL)
+  setnames(d, c("data", "valor"))
+  d[, data := as.IDate(as.Date(data, format = "%d/%m/%Y"))]
+  d[]
+}
+
+ipca <- f_ipca_sgs(DATA_POF, DATA_BASE_LINHA)
+
+if (!is.null(ipca)) {
+  fator_ipca   <- prod(1 + ipca$valor / 100)
+  linha_mensal <- V_LINHA_POF_PRECOS_POF * fator_ipca
+
+  message("fator IPCA de ", format(DATA_POF, "%m/%Y"), " a ",
+          format(DATA_BASE_LINHA, "%m/%Y"), ": ", round(fator_ipca, 4))
+  message("linha anterior: R$ ", round(V_LINHA_POF_MENSAL, 2), " por mes")
+  message("linha recalculada: R$ ", round(linha_mensal, 2), " por mes")
+
+  # A linha passa a valer para o resto da rodada, inclusive na PNADC
+  # Trimestral, que calcula o indicador de renda.
+  V_LINHA_POF_MENSAL <<- linha_mensal
+  V_LINHA_POF_HORA   <<- linha_mensal / V_JORNADA_MAX
+} else {
+  warning("IPCA indisponivel. Mantida a linha anterior, de R$ ",
+          round(V_LINHA_POF_MENSAL, 2), ", que pode estar em outra base de ",
+          "precos que a do deflator em uso.", call. = FALSE, immediate. = TRUE)
+}
+```
+
+## Saída
+
+O parâmetro é gravado em `output/parametro_linha_pof.csv` e consumido por
+`R/01_pnadc_trimestral.Rmd` pela variável `V_LINHA_POF_HORA`.
+
+```{r pof-saida}
+parametro <- data.table(
+  parametro = c("linha_precos_pof", "data_base", "linha_mensal",
+                "jornada_referencia", "linha_hora"),
+  valor     = c(V_LINHA_POF_PRECOS_POF, format(DATA_BASE_LINHA),
+                V_LINHA_POF_MENSAL, V_JORNADA_MAX, round(V_LINHA_POF_HORA, 4)))
+
+fwrite(parametro, file.path(DIR_OUT, "parametro_linha_pof.csv"),
+       sep = ";", dec = ",", bom = TRUE)
+parametro
+```
+
+## Ao trocar a safra do deflator
+
+1. Baixe o `Deflatores.zip` novo e substitua `dados/pnadc_trimestral/deflator_PNADC.xls`.
+2. Ajuste `DATA_BASE_LINHA` neste script para a base de preços do novo deflator.
+3. Rode este script e copie a linha recalculada para `V_LINHA_POF_MENSAL` em
+   `R/00_config.R`.
+4. Rode a PNADC Trimestral com `REFAZER_PNADCT <- TRUE`, porque toda a série de
+   rendimentos muda.

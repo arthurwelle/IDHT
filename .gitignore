@@ -1,0 +1,27 @@
+# Caminhos desta maquina
+R/config_local.R
+
+# Cache de processamento da PNADC: um .rds por trimestre, refeito pelo script
+output/cache_pnadct/
+
+# Resumos mensais dos microdados do CAGED, refeitos pelo script
+dados/mte_caged/bruto/microdados/
+
+# Saidas intermediarias do knitr
+R/*.html
+*_files/
+*_cache/
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# Sistema
+Thumbs.db
+.DS_Store
+~$*
+
+# Tabulacao do Mediador fornecida pelo DIEESE: nao redistribuida
+dados/dieese/manual/mediador_reajustes_por_regiao.xlsx

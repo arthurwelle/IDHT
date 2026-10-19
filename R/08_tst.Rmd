@@ -1,0 +1,215 @@
+---
+title: "TST, novos processos trabalhistas sobre desligamentos"
+subtitle: "Projeto Índice do Trabalho Decente, relatório de execução"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r tst-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
+                      fig.width = 8, fig.height = 4.5)
+if (!exists("DIR_RAIZ")) source("R/00_config.R")
+```
+
+## Fonte
+
+Duas pontas:
+
+- **Numerador**: casos novos recebidos nas Varas do Trabalho, da Base de Dados JT
+  do TST, publicada em
+  <https://www.tst.jus.br/web/estatistica/jt/recebidos-e-julgados>. A base traz
+  dados mensais a partir de 2018 e totais anuais antes disso.
+- **Denominador**: desligamentos do CAGED, pela mesma consulta usada em
+  `R/07_mte_caged.Rmd`, com `saldo_movimentacao = -1`.
+
+Produz a série `NovasAcoes_sobre_Demitidos_MM`.
+
+## Série congelada até 2023
+
+Antes de 2018 o TST só publica totais anuais. A mensalização desse trecho foi
+feita uma vez, aplicando o padrão sazonal obtido de fontes secundárias e
+ajustando o nível por um fator de compatibilização, calculado sobre o período em
+que as duas séries coexistem (2014 a 2018). Esse trecho não se recalcula.
+
+- Arquivo congelado: `dados/tst/congelado/NovasAcoes_sobre_Demitidos_MM_ate2023.csv`
+- Vale até `r format(DATA_CONGELAMENTO)`
+- A partir daí, a série usa os dados mensais oficiais do TST
+
+Detalhes em `dados/tst/LEIAME.md`.
+
+```{r tst-congelado}
+ARQ_CONGELADO <- file.path(DIR_FONTE("tst"), "congelado",
+                           "NovasAcoes_sobre_Demitidos_MM_ate2023.csv")
+
+if (!file.exists(ARQ_CONGELADO)) {
+  stop("Serie congelada ausente em ", ARQ_CONGELADO, "\nVeja dados/tst/LEIAME.md.")
+}
+
+f_registra_manifesto(
+  fonte   = "tst",
+  arquivo = ARQ_CONGELADO,
+  tipo    = "congelado",
+  origem  = paste0("TST mensal de 2018 em diante, trecho anterior mensalizado ",
+                   "com fator de compatibilizacao 2014 a 2018"))
+
+congelado <- fread(ARQ_CONGELADO, dec = ",")[, data := as.IDate(data)]
+congelado[, .(pontos = .N, de = min(data), ate = max(data))]
+```
+
+## Obtenção da Base de Dados JT
+
+O arquivo é baixado da página de estatísticas do TST. Como o endereço do arquivo
+muda a cada republicação, o script tenta o endereço configurado e, se falhar, usa
+a cópia local em `dados/tst/bruto/Base_de_Dados_JT.csv`.
+
+```{r tst-obtencao}
+# Confira o endereco na pagina do TST antes de cada rodada de atualizacao.
+URL_BASE_JT <- NULL   # exemplo: "https://www.tst.jus.br/documents/.../Base de Dados JT.csv"
+ARQ_BASE_JT <- file.path(DIR_FONTE("tst"), "bruto", "Base_de_Dados_JT.csv")
+
+if (!is.null(URL_BASE_JT)) {
+  ok <- tryCatch({
+    download.file(URL_BASE_JT, ARQ_BASE_JT, mode = "wb", quiet = TRUE)
+    TRUE
+  }, error = function(e) {
+    warning("Falha no download da Base de Dados JT (", conditionMessage(e),
+            "). Usando a copia local.", call. = FALSE, immediate. = TRUE)
+    FALSE
+  })
+} else {
+  message("URL_BASE_JT nao configurada. Usando a copia local.")
+}
+
+if (!file.exists(ARQ_BASE_JT)) {
+  warning("Base de Dados JT ausente em ", ARQ_BASE_JT,
+          ". A serie fica apenas com o trecho congelado.",
+          call. = FALSE, immediate. = TRUE)
+  base_jt <- NULL
+} else {
+  f_registra_manifesto("tst", ARQ_BASE_JT,
+                       if (is.null(URL_BASE_JT)) "manual" else "bruto",
+                       "Base de Dados JT, TST, estatisticas da Justica do Trabalho")
+  base_jt <- fread(ARQ_BASE_JT, sep = ";", encoding = "Latin-1",
+                   showProgress = FALSE)
+  print(dim(base_jt))
+}
+```
+
+## Limpeza do numerador
+
+Filtros aplicados: `Variavel` igual a Recebidos, instância das Varas do Trabalho
+e ano e mês preenchidos. Em seguida, soma de `Quantidade` por ano e mês.
+
+```{r tst-numerador}
+if (!is.null(base_jt)) {
+  names(base_jt) <- tolower(gsub("[^A-Za-z0-9]+", "_",
+                                 iconv(names(base_jt), to = "ASCII//TRANSLIT")))
+  message("colunas: ", paste(names(base_jt), collapse = ", "))
+
+  jt <- base_jt[grepl("^recebido", tolower(variavel)) &
+                grepl("vara", tolower(instancia)) &
+                !is.na(mes) & mes != "" & !is.na(ano)]
+
+  jt[, mes_n := suppressWarnings(as.integer(mes))]
+  if (jt[, all(is.na(mes_n))]) {
+    # Em algumas versoes da base o mes vem por extenso.
+    meses <- c("janeiro", "fevereiro", "marco", "abril", "maio", "junho",
+               "julho", "agosto", "setembro", "outubro", "novembro", "dezembro")
+    jt[, mes_n := match(tolower(iconv(mes, to = "ASCII//TRANSLIT")), meses)]
+  }
+
+  jt <- jt[!is.na(mes_n), .(casos = sum(as.numeric(quantidade), na.rm = TRUE)),
+           by = .(ano = as.integer(ano), mes = mes_n)]
+  jt[, data := as.IDate(sprintf("%d-%02d-01", ano, mes))]
+  setorder(jt, data)
+  print(jt[, .(pontos = .N, de = min(data), ate = max(data))])
+} else {
+  jt <- NULL
+}
+```
+
+## Limpeza do denominador
+
+Consulta usada na Base dos Dados, mesmo espelho do CAGED do script 07:
+
+```sql
+SELECT ano, mes, COUNT(*) AS N
+FROM `basedosdados.br_me_caged.microdados_movimentacao`
+WHERE saldo_movimentacao = -1
+GROUP BY ano, mes
+```
+
+```{r tst-denominador}
+ARQ_DESL <- file.path(DIR_FONTE("tst"), "bruto", "CAGED_desligamentos.csv")
+
+if (file.exists(ARQ_DESL)) {
+  f_registra_manifesto("tst", ARQ_DESL, "bruto",
+                       "consulta SQL na Base dos Dados, desligamentos do CAGED")
+  desl <- fread(ARQ_DESL)
+  names(desl) <- tolower(names(desl))
+  desl <- desl[, .(data = as.IDate(sprintf("%d-%02d-01", as.integer(ano),
+                                           as.integer(mes))),
+                   n = as.numeric(n))][order(data)]
+  print(desl[, .(pontos = .N, de = min(data), ate = max(data))])
+} else {
+  warning("Desligamentos ausentes em ", ARQ_DESL,
+          ". A serie fica apenas com o trecho congelado.",
+          call. = FALSE, immediate. = TRUE)
+  desl <- NULL
+}
+```
+
+## Cálculo da atualização
+
+$$\text{Indicador}_t = \frac{\text{MM}_{12}(\text{casos novos})_t}{\text{MM}_{12}(\text{desligamentos})_t}$$
+
+```{r tst-calculo}
+atualizacao <- NULL
+if (!is.null(jt) && !is.null(desl)) {
+  jt[, casos_mm := f_mm12(casos)]
+  desl[, desl_mm := f_mm12(n)]
+  at <- merge(jt[, .(data, casos_mm)], desl[, .(data, desl_mm)], by = "data")
+  at <- at[!is.na(casos_mm) & !is.na(desl_mm) & data > DATA_CONGELAMENTO,
+           .(data, valor = casos_mm / desl_mm)]
+  if (nrow(at)) atualizacao <- at
+  print(at[, .(pontos = .N)])
+}
+```
+
+## Emenda e validação
+
+```{r tst-emenda}
+d <- if (is.null(atualizacao)) {
+  congelado[, .(data, valor)]
+} else {
+  rbind(congelado[data <= DATA_CONGELAMENTO, .(data, valor)], atualizacao)
+}
+setorder(d, data)
+d <- d[data >= as.IDate(sprintf("%d-01-01", ANO_INICIO))]
+
+f_valida_serie(d, "NovasAcoes_sobre_Demitidos_MM",
+               faixa = c(0, 1), var_max = 0.05, freq = "month")
+
+if (!is.null(atualizacao)) {
+  antes  <- d[data <= DATA_CONGELAMENTO][.N, valor]
+  depois <- d[data >  DATA_CONGELAMENTO][1, valor]
+  message("degrau na emenda: ", round(depois - antes, 4))
+  if (abs(depois - antes) > 0.02) {
+    warning("Degrau acima de 2 pontos percentuais na emenda do TST. ",
+            "Confira os filtros da Base de Dados JT.",
+            call. = FALSE, immediate. = TRUE)
+  }
+}
+```
+
+## Saída
+
+```{r tst-saida}
+f_grava_serie(d, "NovasAcoes_sobre_Demitidos_MM")
+f_grafico_serie(d, "NovasAcoes_sobre_Demitidos_MM",
+                titulo = "Novos processos trabalhistas por desligamento",
+                percentual = FALSE)
+```

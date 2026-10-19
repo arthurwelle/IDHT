@@ -1,0 +1,98 @@
+---
+title: "IPEADATA, salário mínimo real"
+subtitle: "Projeto Índice do Trabalho Decente, relatório de execução"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r ipea-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
+                      fig.width = 8, fig.height = 4.5)
+if (!exists("DIR_RAIZ")) source("R/00_config.R")
+```
+
+## Fonte
+
+IPEADATA, série `GAC12_SALMINRE12`: salário mínimo nominal deflacionado pelo
+INPC, mensal, em reais constantes do último mês da série.
+
+Fonte totalmente automatizada: nada precisa ser baixado à mão. O acesso é pelo
+pacote `ipeadatar`, que consulta a API do IPEA.
+
+A série muda de base a cada atualização do IPEA, que traz os valores para o mês
+mais recente. Isso não afeta o índice, porque a normalização de mínimo e máximo
+é invariante a mudanças de escala, mas afeta a comparação de valores absolutos
+entre rodadas.
+
+## Obtenção
+
+```{r ipea-obtencao}
+SERIE_IPEA <- "GAC12_SALMINRE12"
+
+d <- tryCatch(
+  as.data.table(ipeadatar::ipeadata(SERIE_IPEA)),
+  error = function(e) {
+    warning("Falha ao consultar o IPEADATA: ", conditionMessage(e),
+            call. = FALSE, immediate. = TRUE)
+    data.table()
+  })
+
+# A API do IPEA tambem devolve resultado vazio quando o servico esta fora do ar,
+# sem gerar erro. Por isso a checagem e por numero de linhas.
+tem_ipea <- nrow(d) > 0
+
+if (!tem_ipea) {
+  arq_serie <- file.path(DIR_SERIES, "SalarioMinimoReal_MM.csv")
+  warning("IPEADATA indisponivel. A serie nao foi atualizada nesta rodada. ",
+          if (file.exists(arq_serie))
+            "A versao anterior, ja gravada em output/series, segue valendo."
+          else
+            "Nao ha versao anterior gravada: a serie fica ausente do painel.",
+          call. = FALSE, immediate. = TRUE)
+} else {
+  f_registra_manifesto(
+    fonte   = "ipeadata",
+    arquivo = file.path(DIR_FONTE("ipeadata"), paste0(SERIE_IPEA, ".api")),
+    tipo    = "api",
+    origem  = paste0("ipeadatar::ipeadata('", SERIE_IPEA, "')"))
+
+  print(d[, .(pontos = .N, de = min(date), ate = max(date))])
+}
+```
+
+## Limpeza
+
+```{r ipea-limpeza, eval=tem_ipea}
+d <- d[, .(data = as.IDate(date), valor = value)][order(data)]
+d <- d[data >= as.IDate(sprintf("%d-01-01", ANO_INICIO))]
+```
+
+## Harmonização
+
+O salário mínimo é reajustado uma vez por ano, o que produz degraus na série
+mensal. A média móvel de 12 meses suaviza esses degraus e é a versão que entra
+no painel.
+
+```{r ipea-harmonizacao, eval=tem_ipea}
+d[, valor_mm := f_mm12(valor)]
+d <- d[!is.na(valor_mm), .(data, valor = valor_mm)]
+```
+
+## Validação
+
+```{r ipea-validacao, eval=tem_ipea}
+f_valida_serie(d, "SalarioMinimoReal_MM",
+               faixa = c(500, 3000), var_max = 100, freq = "month")
+```
+
+## Saída
+
+```{r ipea-saida, eval=tem_ipea}
+f_grava_serie(d, "SalarioMinimoReal_MM")
+f_grafico_serie(d, "SalarioMinimoReal_MM",
+                titulo = "Salario minimo real, media movel de 12 meses",
+                percentual = FALSE)
+```

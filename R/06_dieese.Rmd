@@ -1,0 +1,225 @@
+---
+title: "DIEESE, greves e acordos coletivos"
+subtitle: "Projeto Índice do Trabalho Decente, relatório de execução"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r dieese-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
+                      fig.width = 8, fig.height = 4.5)
+if (!exists("DIR_RAIZ")) source("R/00_config.R")
+```
+
+## Fonte
+
+Duas séries, as duas do IDH-T, as duas por tabulação especial do DIEESE. Não há
+base aberta com o detalhe necessário, então a coleta é manual e os arquivos
+ficam em `dados/dieese/manual/`.
+
+- **Greves propositivas sobre defensivas**: Sistema de Acompanhamento de Greves
+  (SAG-DIEESE), anual. O SAG reúne greves desde 1978, a partir de notícias da
+  grande mídia e da imprensa sindical, e classifica cada uma por caráter.
+- **Acordos com reajuste acima do INPC**: Sistema de Acompanhamento de
+  Contratações Coletivas (SACC-DIEESE), sobre instrumentos do Sistema Mediador
+  do MTE. Anual até 2017, mensal a partir de 2018.
+
+Como pedir a atualização e o layout esperado de cada planilha estão em
+`dados/dieese/LEIAME.md`.
+
+```{r dieese-arquivos}
+ARQ_GREVES   <- file.path(DIR_FONTE("dieese"), "manual",
+                          "DIEESE_GrevesPropositivasDefensivas.xlsx")
+ARQ_REAJUSTE <- file.path(DIR_FONTE("dieese"), "manual",
+                          "DIEESE_ReajustesAcimaINPC.xlsx")
+ARQ_MEDIADOR <- file.path(DIR_FONTE("dieese"), "manual",
+                          "mediador_reajustes_por_regiao.xlsx")
+# Extensao das greves, digitada dos balancos anuais do DIEESE.
+ARQ_GREVES_EXT <- file.path(DIR_FONTE("dieese"), "manual",
+                            "dieese_carater_greves_2024_2025.csv")
+
+for (a in c(ARQ_GREVES, ARQ_REAJUSTE)) {
+  f_registra_manifesto("dieese", a, "manual",
+                       "tabulacao especial fornecida pelo DIEESE")
+}
+```
+
+## Greves propositivas
+
+Definições do DIEESE. Greve é a interrupção temporária do trabalho, feita
+intencionalmente por um grupo de trabalhadores, para impor reivindicação, opor-se
+a exigência ou expressar queixa. Ficam de fora paralisações patronais e formas de
+protesto sem suspensão do trabalho. São propositivas as greves por novas
+conquistas ou avanço sobre normas já estabelecidas, e defensivas as que buscam
+manutenção ou cumprimento de direitos.
+
+$$\text{Proporção}_{ano} = \frac{\text{propositivas}_{ano}}{\text{propositivas}_{ano} + \text{defensivas}_{ano}}$$
+
+```{r dieese-greves}
+if (!file.exists(ARQ_GREVES)) {
+  warning("Arquivo de greves ausente em ", ARQ_GREVES, ". Serie nao gerada.",
+          call. = FALSE, immediate. = TRUE)
+} else {
+  g <- as.data.table(readxl::read_excel(ARQ_GREVES))
+  names(g) <- tolower(gsub("[^A-Za-z0-9]+", "_", names(g)))
+  stopifnot(all(c("ano", "propositivas", "defensivas") %in% names(g)))
+
+  g <- g[!is.na(ano), .(data = as.IDate(sprintf("%d-01-01", as.integer(ano))),
+                        valor = propositivas / (propositivas + defensivas))]
+  g <- g[data >= as.IDate(sprintf("%d-01-01", ANO_INICIO))][order(data)]
+
+  # Extensao 1: leitura automatica dos balancos de greves em PDF, feita por
+  # R/11_dieese_greves_pdf.Rmd. Tem prioridade, por nao depender de digitacao.
+  ARQ_GREVES_AUTO <- file.path(DIR_FONTE("dieese"), "auto", "greves_balancos.csv")
+  if (file.exists(ARQ_GREVES_AUTO)) {
+    aut <- fread(ARQ_GREVES_AUTO, dec = ",")
+    aut <- aut[, .(data = as.IDate(sprintf("%d-01-01", as.integer(ano))),
+                   valor = propositivas / (propositivas + defensivas))]
+    novos <- aut[data > max(g$data)][order(data)]
+    if (nrow(novos)) {
+      message("anos acrescentados pelos PDF do DIEESE: ", nrow(novos),
+              " (ate ", format(max(novos$data)), ")")
+      g <- rbind(g, novos)
+    }
+  }
+
+  # Extensao 2: planilha digitada a mao, usada so para anos que a leitura
+  # automatica nao cobriu. O arquivo vem em formato longo, uma linha por
+  # carater, com as categorias se sobrepondo: a mesma greve pode ser
+  # propositiva e defensiva, e por isso os percentuais somam mais de 100.
+  if (file.exists(ARQ_GREVES_EXT)) {
+    f_registra_manifesto("dieese", ARQ_GREVES_EXT, "manual",
+                         "balancos anuais de greves do DIEESE, digitados dos PDF")
+
+    ext <- fread(ARQ_GREVES_EXT, dec = ",", encoding = "UTF-8")
+    names(ext) <- tolower(gsub("[^A-Za-z0-9]+", "_",
+                               iconv(names(ext), to = "ASCII//TRANSLIT")))
+    col_car <- grep("carater", names(ext), value = TRUE)[1]
+    col_n   <- grep("greves", names(ext), value = TRUE)
+    col_n   <- setdiff(col_n, grep("total", names(ext), value = TRUE))[1]
+    stopifnot(!is.na(col_car), !is.na(col_n))
+
+    ext <- ext[get(col_car) %in% c("Propositivas", "Defensivas")]
+    ext <- dcast(ext, ano ~ get(col_car), value.var = col_n)
+    ext <- ext[, .(data  = as.IDate(sprintf("%d-01-01", as.integer(ano))),
+                   valor = Propositivas / (Propositivas + Defensivas))]
+
+    novos <- ext[data > max(g$data)][order(data)]
+    if (nrow(novos)) {
+      message("anos acrescentados pelos balancos: ", nrow(novos),
+              " (ate ", format(max(novos$data)), ")")
+      g <- rbind(g, novos)
+    }
+  }
+  print(g[, .(anos = .N, de = min(data), ate = max(data))])
+
+  # Serie anual levada a frequencia trimestral por interpolacao linear:
+  # tres de cada quatro pontos sao construidos.
+  g <- f_anual_para_trimestre(g)
+
+  f_valida_serie(g, "GrevesPropositivas",
+                 faixa = c(0, 1), var_max = 0.2, freq = "quarter")
+  f_grava_serie(g, "GrevesPropositivas")
+  print(f_grafico_serie(g, "GrevesPropositivas",
+                        titulo = "Greves propositivas no total de greves"))
+}
+```
+
+## Acordos com reajuste acima do INPC
+
+Regras de tratamento do DIEESE: consideram-se apenas os reajustes aplicados aos
+salários acima do piso; em reajustes escalonados, registra-se o percentual da
+menor faixa salarial; reajustes parcelados entram pelo percentual total, como se
+pagos de uma vez na data-base; a inflação de referência é o INPC dos 12 meses
+anteriores à data-base, salvo quando o instrumento declara outro período de
+compensação.
+
+A série anual, até 2017, é interpolada para mensal e emendada à série mensal de
+2018 em diante. Depois entra a média móvel de 12 meses.
+
+```{r dieese-reajustes}
+if (!file.exists(ARQ_REAJUSTE)) {
+  warning("Arquivo de reajustes ausente em ", ARQ_REAJUSTE, ". Serie nao gerada.",
+          call. = FALSE, immediate. = TRUE)
+} else {
+  abas <- readxl::excel_sheets(ARQ_REAJUSTE)
+
+  r_anual <- as.data.table(readxl::read_excel(ARQ_REAJUSTE, sheet = "anual"))
+  names(r_anual) <- c("ano", "acima_do_inpc")
+  r_anual <- r_anual[!is.na(ano),
+                     .(data = as.IDate(sprintf("%d-01-01", as.integer(ano))),
+                       valor = as.numeric(acima_do_inpc))]
+
+  r <- r_anual
+  if ("mensal" %in% abas) {
+    r_mensal <- as.data.table(readxl::read_excel(ARQ_REAJUSTE, sheet = "mensal"))
+    names(r_mensal) <- tolower(gsub("[^A-Za-z0-9]+", "_", names(r_mensal)))
+    # A coluna de data vem como ano e mes, no formato "2018-01".
+    r_mensal[, data := as.character(data)]
+    r_mensal[nchar(data) == 7, data := paste0(data, "-01")]
+    r_mensal <- r_mensal[!is.na(data), .(data = as.IDate(data),
+                                         valor = as.numeric(acima_do_inpc))]
+    # A planilha pode vir em percentual de 0 a 100 ou em proporcao.
+    if (r_mensal[, max(valor, na.rm = TRUE)] > 1.5) r_mensal[, valor := valor / 100]
+    message("serie mensal a partir de ", format(min(r_mensal$data)))
+    r <- rbind(r_anual[data < min(r_mensal$data)], r_mensal)
+  }
+
+  # Extensao com a tabulacao do Mediador por regiao e data-base. O valor
+  # nacional e a media das regioes ponderada pelo numero de reajustes, o que
+  # reproduz a serie nacional do DIEESE (correlacao de 0,998 no periodo comum).
+  # Usada apenas para os meses posteriores ao ultimo da aba mensal.
+  if (file.exists(ARQ_MEDIADOR)) {
+    f_registra_manifesto("dieese", ARQ_MEDIADOR, "manual",
+                         "tabulacao DIEESE sobre o Sistema Mediador, por regiao e data-base")
+
+    med <- as.data.table(readxl::read_excel(ARQ_MEDIADOR,
+                                            sheet = "reajustes_regiao", skip = 2))
+    names(med)[1:6] <- c("regiao", "db", "abaixo", "igual", "acima", "n")
+    med <- med[!is.na(db) & !is.na(acima)]
+    med[, `:=`(acima = as.numeric(acima), n = as.numeric(n))]
+    med <- med[, .(valor = sum(acima * n) / sum(n) / 100), by = db]
+    med[, data := as.IDate(paste0(db, "-01"))]
+
+    novos <- med[data > max(r$data), .(data, valor)][order(data)]
+    # (continua abaixo, com os boletins)
+    if (nrow(novos)) {
+      message("meses acrescentados pelo Mediador: ", nrow(novos),
+              " (ate ", format(max(novos$data)), ")")
+      r <- rbind(r, novos)
+    }
+  }
+
+  # Extensao com os boletins De Olho nas Negociacoes, lidos por
+  # R/12_dieese_reajustes_pdf.Rmd. Sao a publicacao oficial da mesma apuracao e
+  # trazem revisoes, por isso tem prioridade nos meses que cobrem.
+  ARQ_REAJ_AUTO <- file.path(DIR_FONTE("dieese"), "auto", "reajustes_boletins.csv")
+  if (file.exists(ARQ_REAJ_AUTO)) {
+    bol <- fread(ARQ_REAJ_AUTO, dec = ",")[, .(data = as.IDate(data), valor = acima)]
+    sobrepostos <- r[data %in% bol$data]
+    if (nrow(sobrepostos)) {
+      dif <- merge(sobrepostos, bol, by = "data")[, mean(abs(valor.x - valor.y))]
+      message("meses em comum com os boletins: ", nrow(sobrepostos),
+              " | diferenca media ", round(dif, 4))
+    }
+    r <- rbind(bol, r[!data %in% bol$data])
+    message("meses vindos dos boletins: ", nrow(bol),
+            " (ate ", format(max(bol$data)), ")")
+  }
+
+  setorder(r, data)
+  r <- f_interpola(r, por = "month")
+  r[, valor_mm := f_mm12(valor)]
+  r <- r[!is.na(valor_mm), .(data, valor = valor_mm)]
+  r <- r[data >= as.IDate(sprintf("%d-01-01", ANO_INICIO))]
+
+  f_valida_serie(r, "ReajustesAcimaINPC_MM",
+                 faixa = c(0, 1), var_max = 0.15, freq = "month")
+  f_grava_serie(r, "ReajustesAcimaINPC_MM")
+  print(f_grafico_serie(r, "ReajustesAcimaINPC_MM",
+                        titulo = "Acordos com reajuste acima da inflacao, media movel 12m"))
+}
+```

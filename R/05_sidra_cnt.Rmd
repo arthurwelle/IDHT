@@ -1,0 +1,246 @@
+---
+title: "SIDRA e Contas Nacionais, massa de rendimentos sobre o PIB"
+subtitle: "Projeto Índice do Trabalho Decente, relatório de execução"
+date: "`r format(Sys.time(), '%d/%m/%Y %H:%M')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r sidra-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE,
+                      fig.width = 8, fig.height = 4.5)
+if (!exists("DIR_RAIZ")) source("R/00_config.R")
+```
+
+## Fonte
+
+Duas pontas, as duas do IBGE:
+
+- **Numerador**: massa de rendimento mensal real habitual de todos os trabalhos,
+  SIDRA, tabela 5606, variável 6293. Acesso por API, automático.
+- **Denominador**: PIB a valores correntes das Contas Nacionais Trimestrais, do
+  arquivo `Tab_Compl_CNT.zip` do FTP do IBGE. Download automático, com cópia
+  local de segurança em `dados/sidra_cnt/bruto/`.
+
+As duas pontas têm origem metodológica distinta, pesquisa domiciliar e contas
+nacionais. O nível da razão não deve ser lido como participação dos salários na
+renda no sentido das contas nacionais. O que interessa é a variação no tempo.
+
+## Obtenção do numerador
+
+```{r sidra-numerador}
+massa <- tryCatch(
+  as.data.table(sidrar::get_sidra(api = "/t/5606/n1/all/v/6293/p/all")),
+  error = function(e) {
+    warning("Falha ao consultar o SIDRA: ", conditionMessage(e),
+            call. = FALSE, immediate. = TRUE)
+    data.table()
+  })
+
+# Controla os blocos seguintes. Sem numerador, a serie nao e atualizada nesta
+# rodada e a versao anterior, se existir, segue valendo.
+tem_sidra <- nrow(massa) > 0
+if (!tem_sidra) {
+  arq_serie <- file.path(DIR_SERIES, "MassaRendaHabTodosTrab_noPIB.csv")
+  warning("SIDRA indisponivel. A serie nao foi atualizada nesta rodada. ",
+          if (file.exists(arq_serie))
+            "A versao anterior, ja gravada em output/series, segue valendo."
+          else
+            "Nao ha versao anterior gravada: a serie fica ausente do painel.",
+          call. = FALSE, immediate. = TRUE)
+}
+
+if (tem_sidra) {
+f_registra_manifesto(
+  fonte   = "sidra_cnt",
+  arquivo = file.path(DIR_FONTE("sidra_cnt"), "sidra_5606.api"),
+  tipo    = "api",
+  origem  = "sidrar::get_sidra('/t/5606/n1/all/v/6293/p/all')")
+
+# Os nomes vem acentuados ("Trimestre (Codigo)"): normaliza para ASCII antes.
+names(massa) <- tolower(gsub("[^A-Za-z0-9]+", "_",
+                             iconv(names(massa), to = "ASCII//TRANSLIT")))
+col_trim  <- grep("^trimestre_codigo", names(massa), value = TRUE)[1]
+col_valor <- grep("^valor$", names(massa), value = TRUE)[1]
+if (is.na(col_trim) || is.na(col_valor)) {
+  stop("Colunas esperadas nao encontradas no retorno do SIDRA: ",
+       paste(names(massa), collapse = ", "))
+}
+
+massa <- massa[, .(cod = as.character(get(col_trim)),
+                   massa = as.numeric(get(col_valor)))]
+# O codigo do SIDRA vem como AAAATT, por exemplo 201201.
+massa[, `:=`(ano = as.integer(substr(cod, 1, 4)),
+             tri = as.integer(substr(cod, 5, 6)))]
+massa[, data := f_data_tri(ano, tri)]
+massa <- massa[ano >= ANO_INICIO, .(data, massa)][order(data)]
+print(massa[, .(pontos = .N, de = min(data), ate = max(data))])
+}
+```
+
+## Obtenção do denominador
+
+O arquivo das Contas Nacionais é baixado a cada rodada. Se o download falhar, o
+script usa a cópia em `dados/sidra_cnt/bruto/Tab_Compl_CNT.xlsx` e avisa.
+
+```{r sidra-denominador-download, eval=tem_sidra}
+URL_CNT  <- paste0("https://ftp.ibge.gov.br/Contas_Nacionais/",
+                   "Contas_Nacionais_Trimestrais/Tabelas_Completas/Tab_Compl_CNT.zip")
+DIR_CNT  <- file.path(DIR_FONTE("sidra_cnt"), "bruto")
+
+# A planilha dentro do ZIP ora vem em .xls, ora em .xlsx. O arquivo e gravado
+# com a extensao original, e a leitura usa a copia mais recente encontrada.
+baixou <- tryCatch({
+  zip_tmp <- tempfile(fileext = ".zip")
+  download.file(URL_CNT, zip_tmp, mode = "wb", quiet = TRUE)
+  arquivos <- unzip(zip_tmp, exdir = tempdir())
+  planilha <- arquivos[grepl("[.]xlsx?$", arquivos)][1]
+  if (is.na(planilha)) stop("ZIP sem planilha")
+  destino <- file.path(DIR_CNT, basename(planilha))
+  file.copy(planilha, destino, overwrite = TRUE)
+  message("Contas Nacionais baixadas e gravadas em ", destino)
+  TRUE
+}, error = function(e) {
+  warning("Falha no download das Contas Nacionais (", conditionMessage(e),
+          "). Usando a copia local.", call. = FALSE, immediate. = TRUE)
+  FALSE
+})
+
+candidatos <- list.files(DIR_CNT, pattern = "^Tab_Compl_CNT.*[.]xlsx?$",
+                         full.names = TRUE)
+if (length(candidatos) == 0) {
+  stop("Sem arquivo das Contas Nacionais. Baixe ", URL_CNT,
+       " e salve a planilha em ", DIR_CNT)
+}
+
+# Testa os candidatos do mais recente para o mais antigo: o IBGE ja distribuiu
+# arquivos .xls que o readxl nao consegue abrir.
+candidatos <- candidatos[order(file.info(candidatos)$mtime, decreasing = TRUE)]
+ARQ_CNT <- NA_character_
+for (cand in candidatos) {
+  if (!inherits(try(readxl::excel_sheets(cand), silent = TRUE), "try-error")) {
+    ARQ_CNT <- cand
+    break
+  }
+  warning("Planilha ilegivel, ignorada: ", basename(cand),
+          call. = FALSE, immediate. = TRUE)
+}
+if (is.na(ARQ_CNT)) {
+  stop("Nenhuma planilha legivel das Contas Nacionais em ", DIR_CNT)
+}
+message("planilha usada: ", basename(ARQ_CNT))
+
+f_registra_manifesto(
+  fonte   = "sidra_cnt",
+  arquivo = ARQ_CNT,
+  tipo    = if (baixou) "bruto" else "manual",
+  origem  = URL_CNT)
+```
+
+## Limpeza do denominador
+
+O layout da planilha muda a cada divulgação. O script procura a aba de valores
+correntes, descobre quantas linhas pular e identifica a coluna do PIB a preços de
+mercado pelo rótulo, em vez de usar posição fixa.
+
+```{r sidra-denominador-limpeza, eval=tem_sidra}
+abas <- readxl::excel_sheets(ARQ_CNT)
+aba_vc <- abas[grepl("corrente", tolower(abas))][1]
+if (is.na(aba_vc)) stop("Aba de valores correntes nao encontrada. Abas: ",
+                        paste(abas, collapse = ", "))
+message("aba usada: ", aba_vc)
+
+# Procura a linha de cabecalho: a primeira em que aparece algo como "PIB".
+bruto <- as.data.table(readxl::read_excel(ARQ_CNT, sheet = aba_vc,
+                                          col_names = FALSE, n_max = 12))
+linha_cab <- which(apply(bruto, 1, function(x) any(grepl("PIB", x, ignore.case = TRUE))))[1]
+if (is.na(linha_cab)) stop("Cabecalho com 'PIB' nao encontrado nas primeiras linhas.")
+
+cnt <- as.data.table(readxl::read_excel(ARQ_CNT, sheet = aba_vc,
+                                        skip = linha_cab - 1))
+col_pib <- grep("^pib$|pib.*mercado|produto interno", tolower(names(cnt)))[1]
+if (is.na(col_pib)) {
+  stop("Coluna do PIB nao encontrada na aba ", aba_vc,
+       ". Colunas: ", paste(names(cnt), collapse = ", "))
+}
+message("coluna do PIB: ", names(cnt)[col_pib], " (posicao ", col_pib, ")")
+
+cnt <- cnt[, c(1, col_pib), with = FALSE]
+names(cnt) <- c("periodo", "pib")
+cnt <- cnt[grepl("^\\d{4}\\.", as.character(periodo))]   # linhas "2012.I"
+
+# O periodo vem como "2012.I": converte o algarismo romano em mes.
+f_romano_mes <- function(x) {
+  data.table::fcase(x == "I", 1L, x == "II", 4L, x == "III", 7L, x == "IV", 10L)
+}
+cnt[, ano := as.integer(str_extract(periodo, "^\\d{4}"))]
+cnt[, mes := f_romano_mes(str_extract(periodo, "[IVX]+$"))]
+cnt <- cnt[!is.na(ano) & !is.na(mes)]
+cnt[, data := as.IDate(sprintf("%d-%02d-01", ano, mes))]
+cnt <- cnt[ano >= ANO_INICIO, .(data, pib = as.numeric(pib))][order(data)]
+cnt[, .(pontos = .N, de = min(data), ate = max(data))]
+```
+
+## Cálculo
+
+A massa do SIDRA vem em termos reais, a preços do último trimestre da série. O
+PIB das Contas Nacionais vem a preços correntes. Para a razão fazer sentido, o
+PIB é deflacionado pelo IPCA para a mesma base de preços da massa.
+
+$$\text{Participação}_t = \frac{\text{massa de rendimentos real}_t}{\text{PIB}_t \times \text{deflator IPCA}_t}$$
+
+```{r sidra-calculo, eval=tem_sidra}
+# IPCA mensal do SGS do Banco Central, serie 433, acumulado em indice.
+f_ipca_indice <- function(inicio, fim) {
+  url <- paste0("https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados",
+                "?formato=csv&dataInicial=", format(inicio, "%d/%m/%Y"),
+                "&dataFinal=", format(fim, "%d/%m/%Y"))
+  d <- tryCatch(fread(url, dec = ","), error = function(e) NULL)
+  if (is.null(d) || nrow(d) == 0) return(NULL)
+  setnames(d, c("data", "valor"))
+  d[, data := as.IDate(as.Date(data, format = "%d/%m/%Y"))]
+  d[, indice := cumprod(1 + valor / 100)]
+  d[, .(data, indice)]
+}
+
+ipca <- tryCatch(f_ipca_indice(min(cnt$data), max(cnt$data) + 93),
+                 error = function(e) {
+                   warning("Falha ao consultar o IPCA: ", conditionMessage(e),
+                           call. = FALSE, immediate. = TRUE)
+                   NULL
+                 })
+
+if (is.null(ipca)) {
+  warning("IPCA indisponivel: a razao fica entre massa real e PIB corrente, ",
+          "o que introduz tendencia artificial. Serie nao gravada.",
+          call. = FALSE, immediate. = TRUE)
+  tem_sidra <- FALSE
+} else {
+  # Base de precos: ultimo mes disponivel, que e a base da massa real do SIDRA.
+  base <- ipca[data == max(data), indice]
+  cnt <- merge(cnt, ipca, by = "data", all.x = TRUE)
+  cnt[, pib_real := pib * (base / indice)]
+
+  d <- merge(massa, cnt[, .(data, pib_real)], by = "data")
+  d[, valor := massa / pib_real]
+  d <- d[!is.na(valor), .(data, valor)][order(data)]
+  print(d[c(1, .N)])
+}
+```
+
+## Validação
+
+```{r sidra-validacao, eval=tem_sidra}
+f_valida_serie(d, "MassaRendaHabTodosTrab_noPIB",
+               faixa = c(0.05, 0.6), var_max = 0.05, freq = "quarter")
+```
+
+## Saída
+
+```{r sidra-saida, eval=tem_sidra}
+f_grava_serie(d, "MassaRendaHabTodosTrab_noPIB")
+f_grafico_serie(d, "MassaRendaHabTodosTrab_noPIB",
+                titulo = "Massa de rendimentos do trabalho sobre o PIB")
+```

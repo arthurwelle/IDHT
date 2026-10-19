@@ -1,0 +1,20 @@
+﻿fonte;arquivo;tipo;origem;modificado;bytes;md5;registrado
+pnadc_trimestral;deflator_PNADC.xls;bruto;ftp.ibge.gov.br/Trabalho_e_Rendimento/.../Trimestral/Microdados/Documentacao/Deflatores.zip;2026-10-05;406528;47950c9889828bbfcf279fb9a8a38af6;2026-10-05 16:32
+pof;POF_RendaNecessaria_RendaEfetiva_Vintesimos.csv;congelado;tabulacao propria sobre os microdados da POF 2017-2018 (IBGE);2026-10-05;20262;e81b3e9b58b04ee41dcc6efbde8b8b97;2026-10-19 16:27
+pnadc_trimestral;deflator_PNADC_2026_trimestral_040506.xls;bruto;https://ftp.ibge.gov.br/Trabalho_e_Rendimento/Pesquisa_Nacional_por_Amostra_de_Domicilios_continua/Trimestral/Microdados/Documentacao/Deflatores.zip;2026-10-19;953856;ff8da5c39679c76d0fef007b25b610f7;2026-10-19 16:27
+ipeadata;GAC12_SALMINRE12.api;api;ipeadatar::ipeadata('GAC12_SALMINRE12');"";"";"";2026-10-19 16:43
+sidra_cnt;sidra_5606.api;api;sidrar::get_sidra('/t/5606/n1/all/v/6293/p/all');"";"";"";2026-10-19 16:43
+sidra_cnt;Tab_Compl_CNT_1T25.xlsx;bruto;https://ftp.ibge.gov.br/Contas_Nacionais/Contas_Nacionais_Trimestrais/Tabelas_Completas/Tab_Compl_CNT.zip;2026-10-05;513959;57742f6619db155898d237034fe5133a;2026-10-19 16:43
+dieese;greves_balancos.csv;bruto;balancos de greves do DIEESE, extraidos dos PDF;2026-10-19;282;50003cb6132a3ad9766c1add6d30c27d;2026-10-19 16:43
+dieese;reajustes_boletins.csv;bruto;boletins De Olho nas Negociacoes, extraidos dos PDF;2026-10-19;2660;a4eb9dd317df238a97c2e583f1ae25df;2026-10-19 16:43
+dieese;DIEESE_GrevesPropositivasDefensivas.xlsx;manual;tabulacao especial fornecida pelo DIEESE;2026-10-05;9319;f7af0842d7dbeb199907c85cdc05693c;2026-10-19 16:43
+dieese;DIEESE_ReajustesAcimaINPC.xlsx;manual;tabulacao especial fornecida pelo DIEESE;2026-10-05;15815;41beba452c2f3e54e30c6e0859bda661;2026-10-19 16:43
+dieese;dieese_carater_greves_2024_2025.csv;manual;balancos anuais de greves do DIEESE, digitados dos PDF;2026-10-19;1371;2be71c208f4233b5887fb80e490fdfc0;2026-10-19 16:43
+dieese;mediador_reajustes_por_regiao.xlsx;manual;tabulacao DIEESE sobre o Sistema Mediador, por regiao e data-base;2026-10-05;94736;2518609c267ac7a0bc5ef035ac275946;2026-10-19 16:43
+mte_caged;Admitidos_ContratosAtipicos_MM_ate2023.csv;congelado;CAGED antigo retropolado e emendado ao Novo CAGED, corte em 2023;2026-10-05;4465;a0e418249e1cfe7eb078a6b5a08c8df8;2026-10-19 16:43
+mte_caged;NOVOCAGED_admitidos.csv;bruto;consulta SQL na Base dos Dados, espelho do CAGED;2026-10-05;981;d260b4fff76373b7a27731d8c8b0195c;2026-10-19 16:43
+mte_caged;NOVOCAGED_admitidos_atipicos.csv;bruto;consulta SQL na Base dos Dados, espelho do CAGED;2026-10-05;870;08ec666f7638f4cf7aa47dcf9ea96cd3;2026-10-19 16:43
+tst;NovasAcoes_sobre_Demitidos_MM_ate2023.csv;congelado;TST mensal de 2018 em diante, trecho anterior mensalizado com fator de compatibilizacao 2014 a 2018;2026-10-05;4355;f8c18cb10d226ca3dddb783451accb3d;2026-10-19 16:43
+tst;Base_de_Dados_JT.csv;manual;Base de Dados JT, TST, estatisticas da Justica do Trabalho;2026-10-05;45379494;3cac10a3f5a2cf6df4b703fa77c79193;2026-10-19 16:43
+inss;AcidentesTrabalhoINSS1999_2022.csv;manual;consulta AEAT, www3.dataprev.gov.br/aeat, tabela liq02;2026-10-05;12273;8810e7dfd3f636d61cee0cf1cfbd42bb;2026-10-19 16:44
+ipec;Confianca_Sindicato_ICS.xlsx;manual;item sindicatos do relatorio anual do ICS, IPEC, digitado a mao;2026-10-05;9106;0ba71ef21670386d22bc2f07964afd88;2026-10-19 16:44
