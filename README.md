@@ -20,7 +20,7 @@ Unicamp.
 SmartLab/
   README.md
   ITD_fontes_metodologia.Rmd / .pdf
-  IMG_doc/                     figuras da Secao 1 da documentacao, uma por indicador
+  IMG_doc/                     figura da POF usada na documentacao; as demais vem de output/IMG
   R/
     00_config.R                caminhos, parametros, dicionario das series, funcoes
     01_pnadc_trimestral.Rmd    14 series, 7 delas no indice

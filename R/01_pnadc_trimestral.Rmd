@@ -84,7 +84,7 @@ DEFLATOR[, .(trimestres = uniqueN(paste(Ano, Trimestre)),
 | `V1028` | peso amostral |
 | `V2007`, `V2010` | sexo, cor ou raça |
 | `V4006`, `V4006A` | motivo do afastamento (muda no 4T2015) |
-| `V4010`, `V4019` | código da ocupação, CNPJ do negócio |
+| `V4019` | CNPJ do negócio |
 | `V40401`, `V40402`, `V40403` | tempo no trabalho atual |
 | `VD4001` a `VD4005` | força de trabalho, ocupação, FT potencial, subocupação |
 | `VD4009`, `VD4011` | posição na ocupação, grupamento ocupacional |
@@ -93,7 +93,7 @@ DEFLATOR[, .(trimestres = uniqueN(paste(Ano, Trimestre)),
 
 ```{r pnadct-colunas}
 COLS_PNADCT <- c("Ano", "Trimestre", "UF", "V1028", "V2007", "V2010",
-                 "V4006", "V4006A", "V4010", "V4019",
+                 "V4006", "V4006A", "V4019",
                  "V40401", "V40402", "V40403",
                  "VD4001", "VD4002", "VD4003", "VD4004", "VD4004A", "VD4005",
                  "VD4009", "VD4011", "VD4012", "VD4019", "VD4031")
@@ -127,11 +127,30 @@ f_prepara_trimestre <- function(v_tri, d_defl) {
     # Trimestre ainda nao processado localmente: busca pelo PNADcIBGE, sem
     # gravar o download. Exige internet.
     message("  baixando ", v_tri, " pelo PNADcIBGE")
-    d <- PNADcIBGE::get_pnadc(year = v_ano, quarter = v_tri_n,
-                              vars = setdiff(COLS_PNADCT,
-                                             c("Ano", "Trimestre", "UF")),
-                              design = FALSE, labels = FALSE,
-                              savedir = tempdir())
+    # O FTP do IBGE corta o download de vez em quando, e o arquivo chega
+    # truncado. Tres tentativas, cada uma em pasta propria para nao reaproveitar
+    # o ZIP incompleto da anterior.
+    d <- NULL
+    for (tentativa in 1:3) {
+      dir_tmp <- file.path(tempdir(), paste0("pnadct_", v_tri, "_", tentativa))
+      dir.create(dir_tmp, showWarnings = FALSE, recursive = TRUE)
+      d <- tryCatch(
+        PNADcIBGE::get_pnadc(year = v_ano, quarter = v_tri_n,
+                             vars = setdiff(COLS_PNADCT,
+                                            c("Ano", "Trimestre", "UF")),
+                             design = FALSE, labels = FALSE,
+                             savedir = dir_tmp),
+        error = function(e) {
+          message("  tentativa ", tentativa, " de ", v_tri, " falhou: ",
+                  conditionMessage(e))
+          NULL
+        })
+      unlink(dir_tmp, recursive = TRUE)
+      if (!is.null(d)) break
+    }
+    if (is.null(d)) {
+      stop("Download do trimestre ", v_tri, " falhou nas tres tentativas.")
+    }
     d <- as.data.table(d)
     faltando <- setdiff(COLS_PNADCT, names(d))
     if (length(faltando)) {
@@ -210,7 +229,10 @@ f_indicadores_trimestre <- function(d) {
 
     # series do IDH-T
     TxCompostaSubutilizacao    = subutilizado / (ft + ftp),
-    PrevidenciaTodosTrab       = d[VD4012 %in% 1, sum(w)] / ft,
+    # Denominador e a populacao ocupada, nao a forca de trabalho: VD4012 so e
+    # preenchida para quem esta ocupado, de modo que o desocupado nunca entra
+    # no numerador e dividir pela forca de trabalho embutiria a desocupacao.
+    PrevidenciaTodosTrab       = d[VD4012 %in% 1, sum(w)] / ocup,
     CarteiraTrabAssalariados   = d[VD4009 %in% c(1, 3, 5, 7), sum(w)] /
                                  d[VD4009 %in% 1:7, sum(w)],
     EstabilidadeEmpregoPrivado = d[tempo_ocupacao >= 12 & VD4009 %in% c(1, 3), sum(w)] /
@@ -341,7 +363,7 @@ nao_percentuais <- c("RendimentoRealMedio", "PopulacaoSeguradaINSS",
                      "Gini_rendahabTodosTrabalhos", "Palma90_40_Massa_TodosTrab",
                      "RendimentoRealMedio_SexoCor")
 for (s in series_pnadct) {
-  f_grafico_serie(f_le_serie(s), s, titulo = s,
+  f_grafico_serie(f_le_serie(s), s,
                   percentual = !(s %in% nao_percentuais))
 }
 ```

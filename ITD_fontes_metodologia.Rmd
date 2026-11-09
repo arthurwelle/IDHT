@@ -56,10 +56,47 @@ f_kable <- function(x, v_titulo = "Título") {
                               font_size = 8)
 }
 
-# Figuras da Secao 1, uma por indicador, copiadas para dentro do pacote em
-# IMG_doc/ para que este documento compile sem depender de pasta externa.
+# Figuras da Secao 1, uma por indicador. A origem preferencial e output/IMG,
+# refeita a cada rodada, de modo que o documento acompanhe os dados. O nome
+# usado no texto e historico e nem sempre coincide com o nome da serie, por isso
+# a tabela de equivalencia abaixo. Quando nao ha figura correspondente no
+# pacote, como no grafico de vigesimos da POF, cai para a copia em IMG_doc/.
+FIG_SERIE <- c(
+  PNADCT_TxCompostaSubutilizacao             = "TxCompostaSubutilizacao",
+  PNADCT_PrevidenciaTodosTrab                = "PrevidenciaTodosTrab",
+  PNADCT_CarteiraTrabAssalariados            = "CarteiraTrabAssalariados",
+  PNADCT_AcessoSeguroDesempregoAssal         = "EstabilidadeEmpregoPrivado",
+  PNADCT_PropoRendaApposentadoriaAcima65anos = "PropoRendaAposentadoriaAcima65anos",
+  PNADCT_Tx_formalizacao                     = "Tx_formalizacao",
+  PNADCT_TxOcupadosRendaAbaixoPOF            = "TxOcupadosRendaAbaixoPOF",
+  PNADCT_RendimentoRealMedio                 = "RendimentoRealMedio",
+  PNADCT_TxJornadaAcima44h                   = "TxJornadaAcima44h",
+  PNADCT_MassaRendaHabTodosTrab_noPIB        = "MassaRendaHabTodosTrab_noPIB",
+  PNADCT_Gini_rendahabTodosTrabalhos         = "Gini_rendahabTodosTrabalhos",
+  PNADCT_Palma90_40_Massa_TodosTrab          = "Palma90_40_Massa_TodosTrab",
+  PNADCT_RendimentoRealMedio_SexoCor         = "RendimentoRealMedio_SexoCor",
+  PNADCT_PostosDirecao_MulheresNegras        = "PostosDirecao_MulheresNegras",
+  PNADCT_AfastamentoRemunerado               = "AfastamentoRemunerado",
+  DIEESE_GrevesPropositivas                  = "GrevesPropositivas",
+  DIEESE_ReajustesAcimaINPC                  = "ReajustesAcimaINPC_MM",
+  IPEA_SalarioMinimoReal                     = "SalarioMinimoReal_MM",
+  CAGED_Admitiodos_ContratosAtipicos         = "Admitidos_ContratosAtipicos_MM",
+  TST_NovasAcoes_sobre_Demitidos             = "NovasAcoes_sobre_Demitidos_MM",
+  INSS_AcidentesTrabalho_ponderadoSegurada   = "AcidentesTrabalho_ponderadoSegurada",
+  ICS_ConfiancaSindicatos                    = "ConfiancaSindicatos")
+
 f_img <- function(v_name) {
-  knitr::include_graphics(paste0("IMG_doc/", v_name, ".png"))
+  arq <- NULL
+  if (v_name %in% names(FIG_SERIE)) {
+    cand <- file.path("output", "IMG", paste0(FIG_SERIE[[v_name]], ".png"))
+    if (file.exists(cand)) arq <- cand
+  }
+  if (is.null(arq)) arq <- file.path("IMG_doc", paste0(v_name, ".png"))
+  if (!file.exists(arq)) {
+    stop("Figura ausente: ", arq,
+         ". Rode run_all.Rmd antes de gerar este documento.")
+  }
+  knitr::include_graphics(arq)
 }
 ```
 
@@ -145,13 +182,15 @@ f_img("PNADCT_PrevidenciaTodosTrab")
 
 \footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
 
-**Variáveis:** `VD4012` (1 contribuinte, 2 não contribuinte), `VD4001`, `V1028`.
+**Variáveis:** `VD4012` (1 contribuinte, 2 não contribuinte), `VD4002`, `V1028`.
 
 **Cálculo.**
 
-$$\text{Taxa} = \frac{\sum_i w_i \cdot [VD4012_i = 1]}{\sum_i w_i \cdot [VD4001_i = 1]}$$
+$$\text{Taxa} = \frac{\sum_i w_i \cdot [VD4012_i = 1]}{\sum_i w_i \cdot [VD4002_i = 1]}$$
 
-**Denominador.** É a **força de trabalho**, e não apenas a população ocupada. A leitura é, portanto, a da cobertura previdenciária no conjunto de quem está no mercado de trabalho, incluindo os desocupados.
+**Numerador.** `VD4012` registra a contribuição para instituto de previdência **em qualquer trabalho** da pessoa, e não apenas no trabalho principal, que é o que o nome da série indica.
+
+**Denominador.** É a **população ocupada**. A razão é que `VD4012` só é preenchida para quem está ocupado: em qualquer trimestre, nenhuma pessoa desocupada tem resposta nessa variável. Usar a força de trabalho como denominador contaria o desocupado embaixo sem a possibilidade de contá-lo em cima, de modo que a série passaria a embutir a taxa de desocupação, já medida pela taxa composta de subutilização. No quarto trimestre de 2024, por exemplo, a taxa é de 0,65 sobre os ocupados e de 0,61 sobre a força de trabalho, e a diferença corresponde à desocupação do período.
 
 \hypertarget{ITD_Sec_1_3}{}
 
@@ -393,9 +432,11 @@ f_img("PNADCT_MassaRendaHabTodosTrab_noPIB")
 
 **Cálculo.**
 
-$$\text{Participação}_t = \frac{\text{massa de rendimentos real}_t}{\text{PIB real}_t}$$
+$$\text{Participação}_t = \frac{3 \times \text{massa de rendimentos real mensal}_t}{\text{PIB real}_t}$$
 
-**Cuidado.** Numerador e denominador têm origens metodológicas distintas (pesquisa domiciliar e contas nacionais). O nível da razão não deve ser lido como participação dos salários na renda no sentido das contas nacionais; o que interessa é a variação ao longo do tempo. A leitura do arquivo das Contas Nacionais depende do layout da planilha, que muda de posição de linha a cada divulgação: confira o `skip` e a coluna do PIB a cada atualização.
+**Periodicidade.** A massa do SIDRA é mensal e o PIB das Contas Nacionais Trimestrais é o produto do trimestre. Por isso a massa é multiplicada por 3, para que os dois lados sejam fluxos do mesmo período. O fator não altera o índice, já que a normalização é invariante a mudança de escala, mas corrige a leitura do nível: sem ele a razão fica em torno de 0,12, que compara um mês com um trimestre, e com ele em torno de 0,36.
+
+**Cuidado.** Numerador e denominador têm origens metodológicas distintas (pesquisa domiciliar e contas nacionais). Mesmo na escala corrigida, o nível da razão não deve ser lido como participação dos salários na renda no sentido das contas nacionais: a massa da PNADC cobre o rendimento habitual do trabalho, sem 13º, férias e contribuição patronal, e é declarada pelo morador. O que interessa é a variação ao longo do tempo. A leitura do arquivo das Contas Nacionais depende do layout da planilha, que muda de posição de linha a cada divulgação: confira o `skip` e a coluna do PIB a cada atualização.
 
 \hypertarget{ITD_Sec_1_12}{}
 
@@ -521,7 +562,7 @@ com negros definidos como `V2010` em (2, 4), isto é, pretos e pardos, e brancos
 
 ## 1.16. Mulheres e negros em postos de direção
 
-**Fonte:** PNADC-T. **Frequência:** trimestral. **Polaridade:** positiva. **Séries:** `PNADCT_PostosDirecao_mulheres`, `_negros`, `_MulheresNegras` e `_restrito_MulheresNegras`. **Dimensão:** qualidade, equidade.
+**Fonte:** PNADC-T. **Frequência:** trimestral. **Polaridade:** positiva. **Série:** `PNADCT_PostosDirecao_MulheresNegras`. **Dimensão:** qualidade, equidade.
 
 #### Figura 1.18. Mulheres negras em postos de direção
 
@@ -531,13 +572,13 @@ f_img("PNADCT_PostosDirecao_MulheresNegras")
 
 \footnotesize Fonte: IBGE, PNAD Contínua Trimestral. Elaboração própria. \normalsize
 
-**Variáveis:** `VD4011` (grupamento ocupacional; 1 é "Diretores e gerentes"), `VD4002`, `V2007`, `V2010`, `V1028`; na versão restrita, `V4010` (código da ocupação).
+**Variáveis:** `VD4011` (grupamento ocupacional; 1 é "Diretores e gerentes"), `VD4002`, `V2007`, `V2010`, `V1028`.
 
 **Cálculo.**
 
 $$\text{Proporção} = \frac{\sum_i w_i \cdot [VD4002_i = 1] \cdot [VD4011_i = 1] \cdot [\text{grupo}_i]}{\sum_i w_i \cdot [VD4002_i = 1] \cdot [VD4011_i = 1]}$$
 
-**Versão restrita.** Para separar direção de gerência, filtra-se `V4010` pelos dois primeiros dígitos 11, 12 e 13 (dirigentes e membros do poder público, dirigentes administrativos e comerciais, dirigentes e gerentes de produção). A amostra fica pequena e a série, mais volátil: usar com média móvel.
+**Versão restrita, testada e descartada.** Para separar direção de gerência, chegou a ser calculada uma variante que filtra `V4010` pelos dois primeiros dígitos 11, 12 e 13 (dirigentes e membros do poder público, dirigentes administrativos e comerciais, dirigentes e gerentes de produção). A amostra resultante é pequena demais para leitura trimestral e a série fica dominada por ruído, então ela não faz parte do pacote. A série aqui descrita é a ampla, sem suavização.
 
 \hypertarget{ITD_Sec_1_17}{}
 
@@ -583,7 +624,7 @@ $$\text{Indicador}_t = \text{MM}_{12}\left(\frac{\text{instrumentos com reajuste
 
 **Regras de tratamento do DIEESE.** Consideram-se apenas os reajustes aplicados aos salários acima do piso; em reajustes escalonados, registra-se o percentual da menor faixa salarial; reajustes parcelados entram pelo percentual total, como se pagos de uma vez na data-base; a inflação de referência é o INPC, salvo quando o instrumento declara outro período de compensação.
 
-**Emenda das frequências.** Até 2017 há um ponto por ano; de 2018 em diante, um por mês. A série anual é interpolada para mensal antes da média móvel: parte dos pontos é construída.
+**Emenda das frequências.** Até 2017 há um ponto por ano, carimbado em janeiro; de 2018 em diante, um por mês. Os buracos da grade mensal são preenchidos por **interpolação linear** antes da média móvel. No trecho anterior a 2018 isso significa 6 observações para 72 meses: 66 pontos, 92% do trecho, são construídos, e a variação dentro do ano não vem do dado. A média móvel de 12 meses só suaviza informação real de 2018 em diante.
 
 **Leitura automática.** Os meses recentes vêm dos boletins *De Olho nas Negociações*, lidos por `R/12_dieese_reajustes_pdf.Rmd`. Cada boletim traz o gráfico das últimas doze datas-base, do qual se extraem doze observações; meses revisados em boletins posteriores ficam com a leitura mais recente. A ordem de prioridade entre fontes é: boletins, tabulação do Mediador por região, planilha mensal, planilha anual.
 
@@ -820,13 +861,12 @@ tribble(
   "V2010",   "cor ou raca", "1.15, 1.16",
   "V4006",   "motivo do afastamento, ate 3T2015", "1.21",
   "V4006A",  "motivo do afastamento, a partir de 4T2015", "1.21",
-  "V4010",   "codigo da ocupacao (COD), usado na versao restrita de direcao", "1.16",
   "V4019",   "CNPJ do negocio, a partir de 4T2015", "1.7",
   "V40401",  "tempo no trabalho atual, de 1 a 11 meses", "1.4",
   "V40402",  "tempo no trabalho atual, de 1 a menos de 2 anos", "1.4",
   "V40403",  "tempo no trabalho atual, 2 anos ou mais", "1.4",
-  "VD4001",  "condicao em relacao a forca de trabalho", "1.1, 1.2, 1.8, 1.12",
-  "VD4002",  "condicao de ocupacao", "1.1, 1.7, 1.8, 1.16, 1.21",
+  "VD4001",  "condicao em relacao a forca de trabalho", "1.1, 1.8, 1.12",
+  "VD4002",  "condicao de ocupacao", "1.1, 1.2, 1.7, 1.8, 1.16, 1.21",
   "VD4003",  "forca de trabalho potencial", "1.1",
   "VD4004",  "subocupacao por insuficiencia de horas efetivas, ate 3T2015", "1.1",
   "VD4004A", "subocupacao por insuficiencia de horas habituais, a partir de 4T2015", "1.1",

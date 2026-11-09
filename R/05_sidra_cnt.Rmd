@@ -189,7 +189,13 @@ A massa do SIDRA vem em termos reais, a preços do último trimestre da série. 
 PIB das Contas Nacionais vem a preços correntes. Para a razão fazer sentido, o
 PIB é deflacionado pelo IPCA para a mesma base de preços da massa.
 
-$$\text{Participação}_t = \frac{\text{massa de rendimentos real}_t}{\text{PIB}_t \times \text{deflator IPCA}_t}$$
+Falta ainda acertar a periodicidade: a massa do SIDRA é mensal e o PIB das Contas
+Nacionais Trimestrais é o produto do trimestre. A massa é multiplicada por 3 para
+que numerador e denominador sejam fluxos do mesmo período. O fator não altera o
+índice, porque a normalização é invariante a mudança de escala, mas torna o nível
+legível: a razão passa de cerca de 0,12 para cerca de 0,36.
+
+$$\text{Participação}_t = \frac{3 \times \text{massa de rendimentos real mensal}_t}{\text{PIB}_t \times \text{deflator IPCA}_t}$$
 
 ```{r sidra-calculo, eval=tem_sidra}
 # IPCA mensal do SGS do Banco Central, serie 433, acumulado em indice.
@@ -224,7 +230,9 @@ if (is.null(ipca)) {
   cnt[, pib_real := pib * (base / indice)]
 
   d <- merge(massa, cnt[, .(data, pib_real)], by = "data")
-  d[, valor := massa / pib_real]
+  # A massa do SIDRA e mensal e o PIB das Contas Nacionais e o produto do
+  # trimestre. Multiplicar a massa por 3 poe os dois no mesmo fluxo trimestral.
+  d[, valor := (massa * 3) / pib_real]
   d <- d[!is.na(valor), .(data, valor)][order(data)]
   print(d[c(1, .N)])
 }
@@ -233,8 +241,10 @@ if (is.null(ipca)) {
 ## Validação
 
 ```{r sidra-validacao, eval=tem_sidra}
+# Faixa ajustada para a escala trimestral (massa x 3): a serie fica em torno de
+# 0,36. Valor proximo de 0,12 indica que o fator 3 se perdeu em alguma edicao.
 f_valida_serie(d, "MassaRendaHabTodosTrab_noPIB",
-               faixa = c(0.05, 0.6), var_max = 0.05, freq = "quarter")
+               faixa = c(0.2, 0.6), var_max = 0.05, freq = "quarter")
 ```
 
 ## Saída

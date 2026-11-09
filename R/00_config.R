@@ -96,7 +96,7 @@ REFAZER_PNADCT <- FALSE
 DIC_SERIES <- data.table::fread(text = '
 variavel|rotulo|dimensao|polaridade|no_idht|fonte
 TxCompostaSubutilizacao|Taxa composta de subutilizacao|ocupacao_suficiente|negativa|TRUE|pnadc_trimestral
-PrevidenciaTodosTrab|Contribuicao a previdencia|acesso_a_direitos|positiva|TRUE|pnadc_trimestral
+PrevidenciaTodosTrab|Contribuicao a previdencia entre os ocupados|acesso_a_direitos|positiva|TRUE|pnadc_trimestral
 CarteiraTrabAssalariados|Carteira entre os assalariados|acesso_a_direitos|positiva|TRUE|pnadc_trimestral
 EstabilidadeEmpregoPrivado|Estabilidade no emprego formal privado|acesso_a_direitos|positiva|TRUE|pnadc_trimestral
 NovasAcoes_sobre_Demitidos_MM|Novos processos sobre desligamentos|acesso_a_direitos|negativa|FALSE|tst
@@ -341,13 +341,23 @@ tema_itd <- ggplot2::theme_bw() +
     legend.position = "bottom",
     axis.text       = ggplot2::element_text(colour = "black"))
 
-#' Grafico de linha de uma serie, salvo em output/IMG.
-f_grafico_serie <- function(d, nome, titulo = nome, percentual = TRUE) {
+#' Rotulo legivel de uma serie, a partir de DIC_SERIES. Devolve o proprio nome
+#' quando a serie nao esta no dicionario.
+f_rotulo <- function(nome) {
+  r <- DIC_SERIES[variavel == nome, rotulo]
+  if (length(r) == 0 || is.na(r[1])) nome else r[1]
+}
+
+#' Grafico de linha de uma serie, salvo em output/IMG. O titulo padrao e o
+#' rotulo do dicionario, que e o que a documentacao mostra.
+f_grafico_serie <- function(d, nome, titulo = f_rotulo(nome), percentual = TRUE) {
   g <- ggplot2::ggplot(d, ggplot2::aes(as.Date(data), valor)) +
     ggplot2::geom_line(linewidth = 1) +
     ggplot2::scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
-    ggplot2::labs(title = titulo, x = NULL, y = NULL,
-                  caption = "Fonte: elaboracao propria. Projeto ITD.") +
+    # Sem linha de fonte dentro da figura: quem a exibe, documentacao ou
+    # relatorio da rodada, escreve a fonte no texto, e as duas juntas ficavam
+    # repetidas e as vezes em desacordo.
+    ggplot2::labs(title = titulo, x = NULL, y = NULL) +
     tema_itd
   if (percentual) g <- g + ggplot2::scale_y_continuous(labels = scales::percent_format())
   ggplot2::ggsave(file.path(DIR_IMG, paste0(nome, ".png")), g,
