@@ -93,6 +93,5 @@ f_valida_serie(d, "SalarioMinimoReal_MM",
 ```{r ipea-saida, eval=tem_ipea}
 f_grava_serie(d, "SalarioMinimoReal_MM")
 f_grafico_serie(d, "SalarioMinimoReal_MM",
-                titulo = "Salario minimo real, media movel de 12 meses",
-                percentual = FALSE)
+                titulo = "Salario minimo real, media movel de 12 meses")
 ```

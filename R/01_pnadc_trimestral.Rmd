@@ -358,14 +358,9 @@ message("validacao concluida para ", length(l_regras), " series")
 series_pnadct <- setdiff(names(resultado), c("Ano", "Trimestre", "data"))
 for (s in series_pnadct) f_grava_serie(resultado[, .(data, valor = get(s))], s)
 
-# Graficos de conferencia. As series que nao sao proporcao saem com escala livre.
-nao_percentuais <- c("RendimentoRealMedio", "PopulacaoSeguradaINSS",
-                     "Gini_rendahabTodosTrabalhos", "Palma90_40_Massa_TodosTrab",
-                     "RendimentoRealMedio_SexoCor")
-for (s in series_pnadct) {
-  f_grafico_serie(f_le_serie(s), s,
-                  percentual = !(s %in% nao_percentuais))
-}
+# Graficos de conferencia. A escala e o formato do eixo y de cada serie estao
+# em ESCALA_Y e FORMATO_Y, em R/00_config.R.
+for (s in series_pnadct) f_grafico_serie(f_le_serie(s), s)
 ```
 
 ```{r pnadct-grafico-principal, echo=FALSE}

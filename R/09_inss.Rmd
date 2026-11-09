@@ -117,8 +117,7 @@ f_valida_serie(r, "AcidentesTrabalho_ponderadoSegurada",
 ```{r inss-saida, eval=tem_cat}
 f_grava_serie(r, "AcidentesTrabalho_ponderadoSegurada")
 f_grafico_serie(r, "AcidentesTrabalho_ponderadoSegurada",
-                titulo = "Acidentes de trabalho por mil segurados",
-                percentual = FALSE)
+                titulo = "Acidentes de trabalho por mil segurados")
 ```
 
 ## Leitura do indicador

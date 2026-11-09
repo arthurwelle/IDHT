@@ -332,14 +332,64 @@ f_registra_manifesto <- function(fonte, arquivo, tipo, origem) {
   invisible(novo)
 }
 
-#' Tema dos graficos.
+#' Tema dos graficos, o mesmo usado nas figuras do projeto ITD.
 tema_itd <- ggplot2::theme_bw() +
   ggplot2::theme(
-    text            = ggplot2::element_text(size = 12),
-    plot.title      = ggplot2::element_text(face = "bold", size = 12),
+    text            = ggplot2::element_text(face = "bold", size = 12),
+    plot.title      = ggplot2::element_text(face = "bold", size = 12,
+                                            margin = ggplot2::margin(0, 0, 10, 0)),
+    plot.subtitle   = ggplot2::element_text(size = 11),
+    plot.title.position   = "plot",
+    plot.caption.position = "plot",
     legend.title    = ggplot2::element_blank(),
     legend.position = "bottom",
-    axis.text       = ggplot2::element_text(colour = "black"))
+    legend.text     = ggplot2::element_text(size = 12, face = "bold"),
+    axis.text.x     = ggplot2::element_text(colour = "black", size = 12, vjust = 0.5),
+    axis.text.y     = ggplot2::element_text(colour = "black", size = 12, face = "bold"),
+    axis.title      = ggplot2::element_text(size = 12, face = "bold"))
+
+# ------------------------------------------------------------------------------
+# Escala do eixo y, serie a serie, como nas figuras do projeto ITD. Sem isso o
+# ggplot ajusta o eixo ao intervalo observado e a mesma serie muda de aparencia
+# a cada rodada, o que dificulta comparar versoes do relatorio.
+#   "zero"  de 0 ate o maximo mais 10%
+#   "meio"  de 0,5 ate o maximo mais 10%, para taxas que nunca se aproximam de 0
+#   "min"   do minimo menos 20% ate o maximo mais 10%, sem referencia em zero
+#   "livre" intervalo observado, sem piso imposto
+# Formato do rotulo: "pct" percentual, "num" numero, "reais" moeda.
+# ------------------------------------------------------------------------------
+
+ESCALA_Y <- c(
+  TxCompostaSubutilizacao            = "zero",
+  PrevidenciaTodosTrab               = "meio",
+  CarteiraTrabAssalariados           = "meio",
+  EstabilidadeEmpregoPrivado         = "meio",
+  Tx_formalizacao                    = "meio",
+  TxOcupadosRendaAbaixoPOF           = "zero",
+  RendimentoRealMedio                = "zero",
+  TxJornadaAcima44h                  = "zero",
+  RendimentoRealMedio_SexoCor        = "zero",
+  PostosDirecao_MulheresNegras       = "zero",
+  AfastamentoRemunerado              = "zero",
+  MassaRendaHabTodosTrab_noPIB       = "zero",
+  NovasAcoes_sobre_Demitidos_MM      = "zero",
+  Admitidos_ContratosAtipicos_MM     = "zero",
+  GrevesPropositivas                 = "zero",
+  ReajustesAcimaINPC_MM              = "zero",
+  ConfiancaSindicatos                = "zero",
+  AcidentesTrabalho_ponderadoSegurada = "zero",
+  PopulacaoSeguradaINSS              = "zero",
+  Gini_rendahabTodosTrabalhos        = "min",
+  Palma90_40_Massa_TodosTrab         = "min",
+  PropoRendaAposentadoriaAcima65anos = "min",
+  SalarioMinimoReal_MM               = "livre")
+
+FORMATO_Y <- c(
+  RendimentoRealMedio                 = "reais",
+  SalarioMinimoReal_MM                = "reais",
+  Palma90_40_Massa_TodosTrab          = "num",
+  AcidentesTrabalho_ponderadoSegurada = "num",
+  PopulacaoSeguradaINSS               = "num")
 
 #' Rotulo legivel de uma serie, a partir de DIC_SERIES. Devolve o proprio nome
 #' quando a serie nao esta no dicionario.
@@ -348,20 +398,43 @@ f_rotulo <- function(nome) {
   if (length(r) == 0 || is.na(r[1])) nome else r[1]
 }
 
-#' Grafico de linha de uma serie, salvo em output/IMG. O titulo padrao e o
-#' rotulo do dicionario, que e o que a documentacao mostra.
-f_grafico_serie <- function(d, nome, titulo = f_rotulo(nome), percentual = TRUE) {
+#' Grafico de linha de uma serie, salvo em output/IMG, no padrao do projeto
+#' ITD: traco grosso, marcas anuais no eixo x e escala do eixo y definida por
+#' serie em ESCALA_Y e FORMATO_Y. O titulo padrao e o rotulo do dicionario.
+#' @param escala  sobrepoe ESCALA_Y: "zero", "meio", "min" ou "livre".
+#' @param formato sobrepoe FORMATO_Y: "pct", "num" ou "reais".
+f_grafico_serie <- function(d, nome, titulo = f_rotulo(nome),
+                            escala = NULL, formato = NULL) {
+  if (is.null(escala))  escala  <- if (nome %in% names(ESCALA_Y))  ESCALA_Y[[nome]]  else "zero"
+  if (is.null(formato)) formato <- if (nome %in% names(FORMATO_Y)) FORMATO_Y[[nome]] else "pct"
+
+  f_limites <- switch(
+    escala,
+    zero  = function(y) c(0, max(y) * 1.1),
+    meio  = function(y) c(0.5, max(y) * 1.1),
+    min   = function(y) c(min(y) * 0.8, max(y) * 1.1),
+    livre = NULL,
+    stop("Escala desconhecida em ESCALA_Y para ", nome, ": ", escala))
+
+  rotulos <- switch(
+    formato,
+    pct   = scales::percent_format(),
+    num   = scales::number_format(big.mark = ".", decimal.mark = ","),
+    reais = scales::dollar_format(prefix = "R$ ", big.mark = ".", decimal.mark = ","),
+    stop("Formato desconhecido em FORMATO_Y para ", nome, ": ", formato))
+
   g <- ggplot2::ggplot(d, ggplot2::aes(as.Date(data), valor)) +
-    ggplot2::geom_line(linewidth = 1) +
-    ggplot2::scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+    ggplot2::geom_line(linewidth = 1.5) +
+    ggplot2::scale_x_date(date_breaks = "1 year",
+                          labels = scales::date_format("%Y")) +
+    ggplot2::scale_y_continuous(labels = rotulos, limits = f_limites) +
     # Sem linha de fonte dentro da figura: quem a exibe, documentacao ou
     # relatorio da rodada, escreve a fonte no texto, e as duas juntas ficavam
     # repetidas e as vezes em desacordo.
     ggplot2::labs(title = titulo, x = NULL, y = NULL) +
     tema_itd
-  if (percentual) g <- g + ggplot2::scale_y_continuous(labels = scales::percent_format())
   ggplot2::ggsave(file.path(DIR_IMG, paste0(nome, ".png")), g,
-                  width = 8, height = 5, dpi = 150)
+                  width = 8, height = 5, dpi = "retina")
   g
 }
 

@@ -210,6 +210,5 @@ if (!is.null(atualizacao)) {
 ```{r tst-saida}
 f_grava_serie(d, "NovasAcoes_sobre_Demitidos_MM")
 f_grafico_serie(d, "NovasAcoes_sobre_Demitidos_MM",
-                titulo = "Novos processos trabalhistas por desligamento",
-                percentual = FALSE)
+                titulo = "Novos processos trabalhistas por desligamento")
 ```
